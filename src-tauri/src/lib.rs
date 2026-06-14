@@ -1,15 +1,34 @@
+mod appfootprint;
 mod archive;
+mod browser;
+mod duplicates;
+mod forecast;
 mod scanner;
+mod timemachine;
 mod vault;
 
+use appfootprint::AppFootprint;
 use archive::ArchiveRecommendation;
+use browser::BrowserCache;
+use duplicates::DuplicateGroup;
+use forecast::StorageForecast;
 use scanner::{ScanResult, ScannedItem};
+use tauri::Emitter;
+use timemachine::TimeMachineInfo;
 use vault::VaultItem;
 
 /// Perform a full storage scan
 #[tauri::command]
 fn scan_storage() -> Result<ScanResult, String> {
     Ok(scanner::perform_scan())
+}
+
+/// Perform a full storage scan with progress streaming
+#[tauri::command]
+fn scan_storage_with_progress(app: tauri::AppHandle) -> Result<ScanResult, String> {
+    Ok(scanner::perform_scan_with_progress(move |msg| {
+        let _ = app.emit("scan-progress", msg);
+    }))
 }
 
 /// Initialize the recovery vault
@@ -140,12 +159,48 @@ fn archive_project(source_path: String, destination_dir: String) -> Result<Strin
     archive::archive_project(&source_path, &destination_dir)
 }
 
+#[tauri::command]
+fn detect_duplicates() -> Vec<DuplicateGroup> {
+    duplicates::find_duplicates()
+}
+
+#[tauri::command]
+fn detect_browser_caches() -> Vec<BrowserCache> {
+    browser::detect_browser_caches()
+}
+
+#[tauri::command]
+fn detect_time_machine() -> TimeMachineInfo {
+    timemachine::detect_snapshots()
+}
+
+#[tauri::command]
+fn get_storage_forecast() -> StorageForecast {
+    forecast::get_forecast()
+}
+
+#[tauri::command]
+fn record_storage_snapshot(used_bytes: u64, free_bytes: u64, total_bytes: u64) -> Result<(), String> {
+    forecast::record_snapshot(used_bytes, free_bytes, total_bytes)
+}
+
+#[tauri::command]
+fn record_clean_action(bytes_freed: u64, items_cleaned: u32) -> Result<(), String> {
+    forecast::record_clean(bytes_freed, items_cleaned)
+}
+
+#[tauri::command]
+fn analyze_app_footprints() -> Vec<AppFootprint> {
+    appfootprint::analyze_footprints()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             scan_storage,
+            scan_storage_with_progress,
             init_vault,
             vault_move,
             vault_restore,
@@ -155,6 +210,13 @@ pub fn run() {
             find_archive_candidates,
             list_volumes,
             archive_project,
+            detect_duplicates,
+            detect_browser_caches,
+            detect_time_machine,
+            get_storage_forecast,
+            record_storage_snapshot,
+            record_clean_action,
+            analyze_app_footprints,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

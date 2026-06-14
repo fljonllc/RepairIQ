@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -5,6 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 use walkdir::WalkDir;
+
+// ============================================================
+// PUBLIC TYPES — unchanged interface
+// ============================================================
 
 /// Safety classification for each scanned item
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -38,21 +43,21 @@ pub struct ScannedItem {
     pub owner: String,
     pub verdict: String,
     pub verdict_reason: String,
-    pub file_count: u64,         // How many files inside
-    pub largest_files: Vec<String>, // Top 5 largest files inside (name + size)
-    pub depends_on: Vec<String>, // What apps/services depend on this
-    pub clean_command: String,   // Terminal command to clean this properly (if any)
-    pub recommendation: String,  // "Clean" | "Archive" | "Review First" | "Do Not Touch"
-    pub action_label: String,    // "Clean Cache" | "Archive Project" | "Remove" | etc
-    pub risk_level: String,      // "None" | "Low" | "Medium" | "High" | "Critical"
-    pub time_to_rebuild: String, // How long to rebuild after removal
-    pub side_effects: String,    // What happens as a side effect
-    pub why_here: String,        // Why this is taking up space
-    pub reasoning: Vec<String>,  // Safety score reasoning checklist items
-    pub confidence: u8,           // 0-100 percentage
-    pub evidence: Vec<String>,    // Evidence items that were checked
-    pub why_recommended: String,  // Why RepairIQ recommends this specific action
-    pub what_if_wrong: String,    // What happens if our recommendation is wrong
+    pub file_count: u64,
+    pub largest_files: Vec<String>,
+    pub depends_on: Vec<String>,
+    pub clean_command: String,
+    pub recommendation: String,
+    pub action_label: String,
+    pub risk_level: String,
+    pub time_to_rebuild: String,
+    pub side_effects: String,
+    pub why_here: String,
+    pub reasoning: Vec<String>,
+    pub confidence: u8,
+    pub evidence: Vec<String>,
+    pub why_recommended: String,
+    pub what_if_wrong: String,
 }
 
 /// Category breakdown for the Storage Story
@@ -77,7 +82,167 @@ pub struct ScanResult {
     pub scan_duration_ms: u64,
 }
 
-/// Intelligence data for a path
+// ============================================================
+// SYSTEM STATE — checked ONCE at start of scan, not per-item
+// ============================================================
+
+/// Cached system state to avoid spawning processes per-item
+struct SystemState {
+    docker_running: bool,
+    docker_containers_active: bool,
+    docker_has_volumes: bool,
+    running_apps: Vec<String>,
+}
+
+impl SystemState {
+    fn detect() -> Self {
+        let docker_running = Command::new("pgrep")
+            .args(["-x", "Docker"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        let docker_containers_active = if docker_running {
+            Command::new("docker")
+                .args(["ps", "-q"])
+                .output()
+                .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        let docker_has_volumes = if docker_running {
+            Command::new("docker")
+                .args(["volume", "ls", "-q"])
+                .output()
+                .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        // Get ALL running processes in one call
+        let running_apps = Command::new("ps")
+            .args(["-axo", "comm"])
+            .output()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_lowercase())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Self {
+            docker_running,
+            docker_containers_active,
+            docker_has_volumes,
+            running_apps,
+        }
+    }
+
+    fn is_app_running(&self, name: &str) -> bool {
+        let name_lower = name.to_lowercase();
+        self.running_apps.iter().any(|a| a.contains(&name_lower))
+    }
+}
+
+// ============================================================
+// SINGLE-PASS DIRECTORY SCAN — all data in ONE walk
+// ============================================================
+
+/// Result of a single-pass directory walk
+struct DirScanResult {
+    total_size: u64,
+    file_count: u64,
+    largest_files: Vec<(String, u64)>,
+    most_recent_days: Option<u64>,
+    has_git: bool,
+    has_uncommitted_changes: bool,
+}
+
+/// Walk a directory ONCE and gather ALL metrics
+fn walk_directory_once(path: &Path) -> DirScanResult {
+    let mut total_size = 0u64;
+    let mut file_count = 0u64;
+    let mut largest_files: Vec<(String, u64)> = Vec::new();
+    let mut most_recent: Option<SystemTime> = None;
+    let has_git = path.join(".git").exists();
+
+    for entry in WalkDir::new(path)
+        .max_depth(50)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        total_size += size;
+        file_count += 1;
+
+        // Track top 5 largest
+        if largest_files.len() < 5 || size > largest_files.last().map(|f| f.1).unwrap_or(0) {
+            let name = entry.file_name().to_string_lossy().to_string();
+            largest_files.push((name, size));
+            largest_files.sort_by(|a, b| b.1.cmp(&a.1));
+            largest_files.truncate(5);
+        }
+
+        // Track most recent modification
+        if let Ok(meta) = entry.metadata() {
+            if let Ok(modified) = meta.modified() {
+                most_recent = Some(match most_recent {
+                    Some(prev) => prev.max(modified),
+                    None => modified,
+                });
+            }
+        }
+    }
+
+    // Check git status only if .git exists
+    let has_uncommitted_changes = if has_git {
+        Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(path)
+            .output()
+            .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let most_recent_days = most_recent.and_then(|t| {
+        SystemTime::now()
+            .duration_since(t)
+            .ok()
+            .map(|d| d.as_secs() / 86400)
+    });
+
+    DirScanResult {
+        total_size,
+        file_count,
+        largest_files,
+        most_recent_days,
+        has_git,
+        has_uncommitted_changes,
+    }
+}
+
+/// Format largest files for display
+fn format_largest_files(files: &[(String, u64)]) -> Vec<String> {
+    files
+        .iter()
+        .map(|(name, size)| format!("{} — {}", name, format_size(*size)))
+        .collect()
+}
+
+// ============================================================
+// INTELLIGENCE TYPES
+// ============================================================
+
 #[derive(Default)]
 struct ItemIntel {
     description: String,
@@ -103,259 +268,9 @@ struct ItemIntel {
     what_if_wrong: String,
 }
 
-impl ItemIntel {
-    fn new(
-        description: impl Into<String>,
-        impact: impl Into<String>,
-        recovery_method: impl Into<String>,
-        owner: impl Into<String>,
-        safety_score: u8,
-        safety: SafetyLevel,
-        verdict: impl Into<String>,
-        verdict_reason: impl Into<String>,
-    ) -> Self {
-        Self {
-            description: description.into(),
-            impact: impact.into(),
-            recovery_method: recovery_method.into(),
-            owner: owner.into(),
-            safety_score,
-            safety,
-            verdict: verdict.into(),
-            verdict_reason: verdict_reason.into(),
-            depends_on: vec![],
-            clean_command: String::new(),
-            recommendation: String::new(),
-            action_label: String::new(),
-            risk_level: String::new(),
-            time_to_rebuild: String::new(),
-            side_effects: String::new(),
-            why_here: String::new(),
-            reasoning: vec![],
-            confidence: 50,
-            evidence: vec![],
-            why_recommended: String::new(),
-            what_if_wrong: String::new(),
-        }
-    }
-
-    fn with_deps(mut self, deps: Vec<&str>) -> Self {
-        self.depends_on = deps.into_iter().map(|s| s.to_string()).collect();
-        self
-    }
-
-    fn with_command(mut self, cmd: impl Into<String>) -> Self {
-        self.clean_command = cmd.into();
-        self
-    }
-
-    fn with_advisor(mut self, recommendation: impl Into<String>, action_label: impl Into<String>, risk_level: impl Into<String>, time_to_rebuild: impl Into<String>, side_effects: impl Into<String>, why_here: impl Into<String>, reasoning: Vec<&str>) -> Self {
-        self.recommendation = recommendation.into();
-        self.action_label = action_label.into();
-        self.risk_level = risk_level.into();
-        self.time_to_rebuild = time_to_rebuild.into();
-        self.side_effects = side_effects.into();
-        self.why_here = why_here.into();
-        self.reasoning = reasoning.into_iter().map(|s| s.to_string()).collect();
-        self
-    }
-}
 
 // ============================================================
-// REAL-TIME SYSTEM CHECKS — verify actual state, don't guess
-// ============================================================
-
-/// Check if Docker is currently running
-fn is_docker_running() -> bool {
-    Command::new("pgrep")
-        .args(["-x", "Docker"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// Check if there are active Docker containers
-fn has_running_containers() -> bool {
-    Command::new("docker")
-        .args(["ps", "-q"])
-        .output()
-        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-        .unwrap_or(false)
-}
-
-/// Check if Docker has named volumes with data
-fn has_docker_volumes() -> bool {
-    Command::new("docker")
-        .args(["volume", "ls", "-q"])
-        .output()
-        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-        .unwrap_or(false)
-}
-
-/// Check if an app is currently running by process name
-fn is_app_running(app_name: &str) -> bool {
-    Command::new("pgrep")
-        .args(["-i", app_name])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// Check if a path contains any git repositories with uncommitted changes
-fn has_uncommitted_git_changes(path: &Path) -> bool {
-    // Look for .git directory
-    let git_dir = path.join(".git");
-    if git_dir.exists() {
-        let output = Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(path)
-            .output();
-        if let Ok(o) = output {
-            let status = String::from_utf8_lossy(&o.stdout);
-            return !status.trim().is_empty();
-        }
-    }
-    false
-}
-
-/// Check if path contains user-created files (not just caches/configs)
-fn contains_user_data(path: &Path) -> bool {
-    // Look for common user-data indicators
-    let user_indicators = [
-        "documents", "photos", "pictures", "videos", "music",
-        "desktop", "downloads", ".docx", ".pdf", ".xlsx",
-        ".psd", ".sketch", ".fig",
-    ];
-    let path_str = path.to_string_lossy().to_lowercase();
-    for indicator in &user_indicators {
-        if path_str.contains(indicator) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Count days since any file in directory was modified
-fn last_modified_days(path: &Path) -> Option<u64> {
-    let mut most_recent: Option<SystemTime> = None;
-    let mut count = 0;
-
-    for entry in WalkDir::new(path)
-        .max_depth(3)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
-        if count >= 200 { break; }
-        if let Ok(meta) = entry.metadata() {
-            if let Ok(modified) = meta.modified() {
-                most_recent = Some(match most_recent {
-                    Some(prev) => prev.max(modified),
-                    None => modified,
-                });
-            }
-        }
-        count += 1;
-    }
-
-    let now = SystemTime::now();
-    most_recent.and_then(|t| now.duration_since(t).ok()).map(|d| d.as_secs() / 86400)
-}
-
-/// Check if an Xcode project depends on this DerivedData
-fn is_xcode_project_open() -> bool {
-    is_app_running("Xcode")
-}
-
-/// Count files in a directory
-fn count_files(path: &Path) -> u64 {
-    WalkDir::new(path)
-        .max_depth(10)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .count() as u64
-}
-
-/// Get the top N largest files in a directory (formatted as "name — size")
-fn get_largest_files(path: &Path, count: usize) -> Vec<String> {
-    let mut files: Vec<(String, u64)> = WalkDir::new(path)
-        .max_depth(5)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter_map(|e| {
-            let size = e.metadata().ok()?.len();
-            let name = e.path().file_name()?.to_string_lossy().to_string();
-            Some((name, size))
-        })
-        .collect();
-
-    files.sort_by(|a, b| b.1.cmp(&a.1));
-    files.truncate(count);
-
-    files
-        .into_iter()
-        .map(|(name, size)| {
-            let size_str = if size >= 1_073_741_824 {
-                format!("{:.1} GB", size as f64 / 1_073_741_824.0)
-            } else if size >= 1_048_576 {
-                format!("{:.0} MB", size as f64 / 1_048_576.0)
-            } else {
-                format!("{:.0} KB", size as f64 / 1024.0)
-            };
-            format!("{} — {}", name, size_str)
-        })
-        .collect()
-}
-
-/// Detect file types in a directory (what kind of content is inside)
-fn detect_content_type(path: &Path) -> String {
-    let mut extensions: HashMap<String, u64> = HashMap::new();
-    let mut count = 0;
-
-    for entry in WalkDir::new(path)
-        .max_depth(4)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
-        if count >= 500 { break; }
-        if let Some(ext) = entry.path().extension() {
-            let ext_str = ext.to_string_lossy().to_lowercase();
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            *extensions.entry(ext_str).or_insert(0) += size;
-        }
-        count += 1;
-    }
-
-    let mut sorted: Vec<(String, u64)> = extensions.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
-
-    let top_types: Vec<String> = sorted.iter().take(3).map(|(ext, _)| ext.clone()).collect();
-
-    if top_types.is_empty() {
-        return "Mixed files".to_string();
-    }
-
-    // Categorize
-    let has_media = top_types.iter().any(|e| ["mp4", "mov", "avi", "mkv", "mp3", "wav", "flac"].contains(&e.as_str()));
-    let has_images = top_types.iter().any(|e| ["jpg", "jpeg", "png", "gif", "heic", "raw", "psd"].contains(&e.as_str()));
-    let has_code = top_types.iter().any(|e| ["rs", "ts", "js", "py", "swift", "java", "go", "c", "cpp", "h"].contains(&e.as_str()));
-    let has_docs = top_types.iter().any(|e| ["pdf", "docx", "xlsx", "pptx", "doc", "txt", "md"].contains(&e.as_str()));
-    let has_binaries = top_types.iter().any(|e| ["o", "dylib", "so", "a", "dll", "exe", "class"].contains(&e.as_str()));
-
-    if has_binaries { return "Compiled binaries (build output, not source code)".to_string(); }
-    if has_code { return "Source code files".to_string(); }
-    if has_media { return "Media files (video/audio)".to_string(); }
-    if has_images { return "Image files".to_string(); }
-    if has_docs { return "Documents".to_string(); }
-
-    format!("Mostly .{} files", top_types[0])
-}
-
-// ============================================================
-// INTELLIGENCE ENGINE — definitive answers
+// UTILITY FUNCTIONS
 // ============================================================
 
 fn get_disk_info() -> (u64, u64, u64) {
@@ -386,27 +301,70 @@ fn days_since_access(path: &Path) -> Option<u64> {
     Some(duration.as_secs() / 86400)
 }
 
-fn dir_size(path: &Path, max_depth: usize) -> u64 {
-    WalkDir::new(path)
-        .max_depth(max_depth)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
-        .sum()
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.0} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    }
 }
 
-/// Calculate confidence from evidence signals
 fn calculate_confidence(signals: &[bool]) -> u8 {
-    if signals.is_empty() { return 50; }
+    if signals.is_empty() {
+        return 50;
+    }
     let positive = signals.iter().filter(|&&s| s).count();
     let total = signals.len();
     let base = (positive as f64 / total as f64 * 100.0) as u8;
-    base.min(99) // never 100% — always leave room for uncertainty
+    base.min(99)
 }
 
-/// The intelligence engine — definitive analysis with real-time verification
-fn analyze_path(path: &Path, category: &str) -> ItemIntel {
+fn extract_app_name(name: &str) -> String {
+    if (name.starts_with("com.") || name.starts_with("org.") || name.starts_with("io."))
+        && name.contains('.')
+    {
+        let parts: Vec<&str> = name.split('.').collect();
+        if let Some(last) = parts.last() {
+            if !last.is_empty() {
+                let capitalized = format!("{}{}", &last[..1].to_uppercase(), &last[1..]);
+                return capitalized;
+            }
+        }
+    }
+    let clean = name
+        .replace('-', " ")
+        .replace('_', " ")
+        .replace(".app", "")
+        .replace(".savedState", "");
+    if clean.is_empty() {
+        return name.to_string();
+    }
+    clean
+}
+
+/// Check if path contains user-created files (not just caches/configs)
+fn contains_user_data(path: &Path) -> bool {
+    let user_indicators = [
+        "documents", "photos", "pictures", "videos", "music",
+        "desktop", "downloads", ".docx", ".pdf", ".xlsx",
+        ".psd", ".sketch", ".fig",
+    ];
+    let path_str = path.to_string_lossy().to_lowercase();
+    for indicator in &user_indicators {
+        if path_str.contains(indicator) {
+            return true;
+        }
+    }
+    false
+}
+
+// ============================================================
+// INTELLIGENCE ENGINE — uses cached SystemState
+// ============================================================
+
+fn analyze_path(path: &Path, category: &str, state: &SystemState, scan_result: Option<&DirScanResult>) -> ItemIntel {
     let path_str = path.to_string_lossy().to_lowercase();
     let name = path
         .file_name()
@@ -416,7 +374,6 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
     let name_lower = name.to_lowercase();
 
     // === PROTECTED — NEVER TOUCH ===
-
     if path_str.contains("/system/") || path_str.contains("/usr/") || path_str.contains("/bin/") || path_str.contains("/sbin/") {
         return ItemIntel {
             description: "macOS system file — required for your computer to boot".into(),
@@ -499,12 +456,12 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
 
     // === XCODE DERIVEDDATA ===
     if path_str.contains("deriveddata") {
-        let xcode_running = is_xcode_project_open();
+        let xcode_running = state.is_app_running("xcode");
         let (verdict, reason) = if xcode_running {
-            ("✅ YES — Clean it (close Xcode first)".into(),
+            ("✅ YES — Clean it (close Xcode first)".to_string(),
              "Xcode is currently open. Close it first, then clean. It rebuilds in 2-5 minutes on next open.".to_string())
         } else {
-            ("✅ YES — Clean it now".into(),
+            ("✅ YES — Clean it now".to_string(),
              "Xcode is not running. This is purely build cache. It rebuilds automatically next time you compile. Zero data loss.".to_string())
         };
 
@@ -542,32 +499,28 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
 
     // === DOCKER ===
     if path_str.contains("docker") || path_str.contains("com.docker") {
-        let docker_running = is_docker_running();
-        let containers_active = if docker_running { has_running_containers() } else { false };
-        let has_volumes = if docker_running { has_docker_volumes() } else { false };
-
         if path_str.contains("overlay") || path_str.contains("/data/") || path_str.contains("com.docker.docker") {
-            let (verdict, reason, score) = if !docker_running {
-                ("✅ YES — Clean it now".into(),
+            let (verdict, reason, score) = if !state.docker_running {
+                ("✅ YES — Clean it now".to_string(),
                  "Docker is not running. This is all cached data. When you start Docker again, it re-downloads what it needs.".to_string(),
                  10u8)
-            } else if containers_active {
-                ("⚠️ STOP CONTAINERS FIRST".into(),
-                 format!("Docker has running containers RIGHT NOW. Stop them first with 'docker stop $(docker ps -q)' then clean. Or run 'docker system prune -a' to clean only unused data."),
+            } else if state.docker_containers_active {
+                ("⚠️ STOP CONTAINERS FIRST".to_string(),
+                 "Docker has running containers RIGHT NOW. Stop them first with 'docker stop $(docker ps -q)' then clean. Or run 'docker system prune -a' to clean only unused data.".to_string(),
                  5)
-            } else if has_volumes {
-                ("✅ YES — But run 'docker system prune -a' instead".into(),
+            } else if state.docker_has_volumes {
+                ("✅ YES — But run 'docker system prune -a' instead".to_string(),
                  "Docker is running but no containers are active. You have named volumes (may contain database data). Use 'docker system prune -a' to safely clean only unused data.".to_string(),
                  8)
             } else {
-                ("✅ YES — Clean it now".into(),
+                ("✅ YES — Clean it now".to_string(),
                  "Docker is running but nothing is active — no containers, no important volumes. This is all just cached layers taking up space.".to_string(),
                  9)
             };
 
             return ItemIntel {
                 description: "Docker container images, layers, and build cache".into(),
-                impact: if containers_active {
+                impact: if state.docker_containers_active {
                     "Active containers will be destroyed. Stop them first.".into()
                 } else {
                     "None. No containers are running. Images re-download automatically when needed.".into()
@@ -580,7 +533,7 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
                 verdict_reason: reason,
                 depends_on: vec![],
                 clean_command: String::new(),
-            ..Default::default()
+                ..Default::default()
             };
         }
     }
@@ -588,17 +541,17 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
     // === GENERAL CACHES ===
     if path_str.contains("/caches/") {
         let app_name = extract_app_name(&name);
-        let app_running = is_app_running(&name_lower.replace("com.", "").replace('.', " "));
-        let days = last_modified_days(path).unwrap_or(999);
+        let app_running = state.is_app_running(&name_lower.replace("com.", "").replace('.', " "));
+        let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(999);
 
         let (verdict, reason) = if days > 30 {
-            ("✅ YES — Clean it now".into(),
+            ("✅ YES — Clean it now".to_string(),
              format!("This cache hasn't been updated in {} days. The app hasn't needed it. It regenerates if the app ever needs it again.", days))
         } else if app_running {
-            ("✅ YES — But quit {} first".into(),
+            ("✅ YES — But quit the app first".to_string(),
              format!("{} is currently running. Quit it first, then clean. Cache rebuilds next time you open it.", app_name))
         } else {
-            ("✅ YES — Clean it now".into(),
+            ("✅ YES — Clean it now".to_string(),
              format!("{} is not running. This cache regenerates automatically next time you open the app. Zero data loss.", app_name))
         };
 
@@ -790,12 +743,12 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
 
     // === XCODE CORESIMULATOR ===
     if path_str.contains("coresimulator") {
-        let xcode_running = is_xcode_project_open();
+        let xcode_running = state.is_app_running("xcode");
         let (verdict, reason) = if xcode_running {
-            ("⚠️ CLOSE XCODE FIRST".into(),
+            ("⚠️ CLOSE XCODE FIRST".to_string(),
              "Xcode is currently open and may be using simulator data. Close Xcode, then clean.".to_string())
         } else {
-            ("✅ YES — Clean it (but expect re-downloads)".into(),
+            ("✅ YES — Clean it (but expect re-downloads)".to_string(),
              "Simulator runtimes will need to be re-downloaded (5-8GB per iOS version). If you do iOS development, this takes time but causes no data loss.".to_string())
         };
 
@@ -816,12 +769,12 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
 
     // === XCODE ARCHIVES ===
     if path_str.contains("xcode") && path_str.contains("archives") {
-        let days = last_modified_days(path).unwrap_or(0);
+        let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(0);
         let (verdict, reason) = if days > 90 {
-            ("✅ YES — Clean it".into(),
+            ("✅ YES — Clean it".to_string(),
              format!("These archives are {} days old. If you haven't submitted to the App Store recently, they're just taking up space. You can rebuild from source anytime.", days))
         } else {
-            ("⚠️ KEEP if you submit to App Store".into(),
+            ("⚠️ KEEP if you submit to App Store".to_string(),
              "These are recent builds. If you submit iOS/Mac apps to the App Store, you may need these for crash symbolication. If you don't publish apps, clean them.".to_string())
         };
 
@@ -843,10 +796,9 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
     // === APPLICATION SUPPORT ===
     if path_str.contains("/application support/") {
         let app_name = extract_app_name(&name);
-        let days = last_modified_days(path).unwrap_or(0);
-        let app_running = is_app_running(&name_lower.replace("com.", "").replace('.', " "));
+        let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(0);
+        let app_running = state.is_app_running(&name_lower.replace("com.", "").replace('.', " "));
 
-        // Known safe-to-clear apps (no critical user data)
         let safe_app_data = ["crashreporter", "caches", "crashpad", "gpuinfo"];
         for safe in &safe_app_data {
             if name_lower.contains(safe) {
@@ -861,22 +813,21 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
                     verdict_reason: "Crash/diagnostic data only. Contains no personal settings or files.".into(),
                     depends_on: vec![],
                     clean_command: String::new(),
-            ..Default::default()
+                    ..Default::default()
                 };
             }
         }
 
-        // Apps with known login/settings data
         let (verdict, reason, score) = if days > 180 && !app_running {
-            ("✅ YES — You haven't used this in 6+ months".into(),
+            ("✅ YES — You haven't used this in 6+ months".to_string(),
              format!("{} hasn't been used in {} days. Its settings are stale. If you ever reopen it, you'll just log in again.", app_name, days),
              8u8)
         } else if app_running {
-            ("🚫 NO — {} is currently running".into(),
+            ("🚫 NO — app is currently running".to_string(),
              format!("{} is running right now. Deleting its data while running could corrupt it. Quit the app first if you want to clean this.", app_name),
              3)
         } else {
-            ("⚠️ WILL RESET APP — You'll need to log in again".into(),
+            ("⚠️ WILL RESET APP — You'll need to log in again".to_string(),
              format!("{} will lose its settings and login state. The app still works but opens like a fresh install. If you use this app regularly, you'll need to reconfigure it.", app_name),
              5)
         };
@@ -917,29 +868,29 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
     // === APPLICATIONS ===
     if category == "Applications" {
         let days = days_since_access(path).unwrap_or(0);
-        let app_running = is_app_running(&name_lower.replace(".app", ""));
+        let app_running = state.is_app_running(&name_lower.replace(".app", ""));
 
         let (verdict, reason, score) = if app_running {
-            ("🚫 NO — Currently running".into(),
+            ("🚫 NO — Currently running".to_string(),
              format!("{} is running right now. You can't remove a running application.", name),
              2u8)
         } else if days > 180 {
-            ("✅ YES — You haven't opened this in 6+ months".into(),
+            ("✅ YES — You haven't opened this in 6+ months".to_string(),
              format!("You last opened {} over {} days ago. If you haven't needed it in 6 months, you don't need it. Re-download from App Store anytime.", name, days),
              8)
         } else if days > 30 {
-            ("⚠️ PROBABLY SAFE — Not used in {} days".into(),
+            ("⚠️ PROBABLY SAFE — Not used in a while".to_string(),
              format!("You haven't opened {} in {} days. If you don't remember why you have it, it's probably safe to remove.", name, days),
              6)
         } else {
-            ("⚠️ RECENTLY USED — Keep it unless you're sure".into(),
+            ("⚠️ RECENTLY USED — Keep it unless you're sure".to_string(),
              format!("You opened {} within the last month. You're probably still using it.", name),
              4)
         };
 
         return ItemIntel {
             description: format!("{} — installed application", name),
-            impact: format!("The app disappears. Re-download from App Store or developer website if you need it later."),
+            impact: "The app disappears. Re-download from App Store or developer website if you need it later.".into(),
             recovery_method: "Re-download from the Mac App Store or the developer's website.".into(),
             owner: name.clone(),
             safety_score: score,
@@ -957,15 +908,15 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
         let days = days_since_access(path).unwrap_or(0);
 
         let (verdict, reason, score) = if days > 90 {
-            ("✅ YES — Not opened in 3+ months".into(),
+            ("✅ YES — Not opened in 3+ months".to_string(),
              format!("You downloaded this {} days ago and haven't opened it since. It's either a one-time download or something you forgot about.", days),
              9u8)
         } else if days > 30 {
-            ("✅ PROBABLY — Not used in {} days".into(),
+            ("✅ PROBABLY — Not used in a while".to_string(),
              format!("Downloaded and not opened in {} days. Most downloads are one-time-use (installers, attachments). Safe to clean.", days),
              7)
         } else {
-            ("⚠️ RECENTLY USED — Check before cleaning".into(),
+            ("⚠️ RECENTLY USED — Check before cleaning".to_string(),
              format!("Accessed {} days ago. You may still be actively using this file.", days),
              4)
         };
@@ -988,27 +939,27 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
     // === DOCUMENTS / DESKTOP ===
     if category == "Documents" || category == "Desktop" {
         let days = days_since_access(path).unwrap_or(0);
-        let has_git = path.join(".git").exists();
-        let has_changes = if has_git { has_uncommitted_git_changes(path) } else { false };
+        let has_git = scan_result.map(|r| r.has_git).unwrap_or_else(|| path.join(".git").exists());
+        let has_changes = scan_result.map(|r| r.has_uncommitted_changes).unwrap_or(false);
 
         let (verdict, reason, score) = if has_changes {
-            ("🚫 NO — Has uncommitted code changes".into(),
+            ("🚫 NO — Has uncommitted code changes".to_string(),
              "This project has uncommitted Git changes. You have work that hasn't been pushed. DO NOT delete.".to_string(),
              2u8)
         } else if has_git && days > 180 {
-            ("📦 ARCHIVE — Move to external drive".into(),
+            ("📦 ARCHIVE — Move to external drive".to_string(),
              format!("Git project not touched in {} days. All changes are committed. Safe to archive to external storage — your code lives on GitHub/remote.", days),
              7)
         } else if days > 365 {
-            ("📦 ARCHIVE — Not opened in over a year".into(),
+            ("📦 ARCHIVE — Not opened in over a year".to_string(),
              format!("Not accessed in {} days (over a year). Move to an external drive rather than deleting — this is your personal data.", days),
              6)
         } else if days > 180 {
-            ("📦 ARCHIVE — Consider moving to external drive".into(),
+            ("📦 ARCHIVE — Consider moving to external drive".to_string(),
              format!("Not accessed in {} days. This is YOUR data — we recommend archiving to an external drive rather than deleting.", days),
              5)
         } else {
-            ("🚫 NO — This is your active data".into(),
+            ("🚫 NO — This is your active data".to_string(),
              format!("Accessed {} days ago. This is your personal/work data. Keep it.", days),
              2)
         };
@@ -1030,14 +981,14 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
 
     // === DEFAULT FALLBACK ===
     let app_name = extract_app_name(&name);
-    let days = last_modified_days(path).unwrap_or(0);
+    let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(0);
 
     let (verdict, reason, score) = if days > 180 {
-        ("⚠️ PROBABLY SAFE — Inactive for 6+ months".into(),
+        ("⚠️ PROBABLY SAFE — Inactive for 6+ months".to_string(),
          format!("This hasn't been modified in {} days. Likely safe to remove, but review contents if unsure.", days),
          6u8)
     } else {
-        ("⚠️ REVIEW — Unknown purpose".into(),
+        ("⚠️ REVIEW — Unknown purpose".to_string(),
          "We couldn't determine exactly what this is. Open the folder to review before deciding.".to_string(),
          5)
     };
@@ -1057,55 +1008,20 @@ fn analyze_path(path: &Path, category: &str) -> ItemIntel {
     }
 }
 
-/// Extract a human-readable app name from a directory/file name
-fn extract_app_name(name: &str) -> String {
-    if (name.starts_with("com.") || name.starts_with("org.") || name.starts_with("io.")) && name.contains('.') {
-        let parts: Vec<&str> = name.split('.').collect();
-        if let Some(last) = parts.last() {
-            if !last.is_empty() {
-                let capitalized = format!("{}{}", &last[..1].to_uppercase(), &last[1..]);
-                return capitalized;
-            }
-        }
-    }
 
-    let clean = name
-        .replace('-', " ")
-        .replace('_', " ")
-        .replace(".app", "")
-        .replace(".savedState", "");
+// ============================================================
+// FILL ADVISOR FIELDS — same logic, uses cached state
+// ============================================================
 
-    if clean.is_empty() {
-        return name.to_string();
-    }
-    clean
-}
-
-/// Public wrappers for lib.rs drill-down
-pub fn classify_item(path: &Path) -> SafetyLevel {
-    analyze_path(path, "").safety
-}
-
-pub fn describe_item(path: &Path) -> String {
-    analyze_path(path, "").description
-}
-
-pub fn get_item_intel(path: &Path, category: &str) -> (SafetyLevel, u8, String, String, String, String, String, String, Vec<String>, String, String, String, String, String, String, String, Vec<String>, u8, Vec<String>, String, String) {
-    let intel = fill_advisor_fields(analyze_path(path, category), path, category);
-    (intel.safety, intel.safety_score, intel.description, intel.impact, intel.recovery_method, intel.owner, intel.verdict, intel.verdict_reason, intel.depends_on, intel.clean_command, intel.recommendation, intel.action_label, intel.risk_level, intel.time_to_rebuild, intel.side_effects, intel.why_here, intel.reasoning, intel.confidence, intel.evidence, intel.why_recommended, intel.what_if_wrong)
-}
-
-/// Fill in advisor fields based on existing intelligence if not already set
-fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> ItemIntel {
+fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str, state: &SystemState, scan_result: Option<&DirScanResult>) -> ItemIntel {
     let path_str = path.to_string_lossy().to_lowercase();
     let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-    // If already filled (by with_advisor), return as-is
+    // If already filled, return as-is
     if !intel.recommendation.is_empty() {
         return intel;
     }
 
-    // Determine recommendation based on safety level and context
     match intel.safety {
         SafetyLevel::Protected => {
             intel.recommendation = "Do Not Touch".to_string();
@@ -1141,15 +1057,10 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
                 "Cannot be re-downloaded".to_string(),
                 "No automatic backup detected".to_string(),
             ];
-            // Calculate confidence for archive items
-            let has_git = path.join(".git").exists();
-            let has_changes = if has_git { has_uncommitted_git_changes(path) } else { false };
+            let has_git = scan_result.map(|r| r.has_git).unwrap_or_else(|| path.join(".git").exists());
+            let has_changes = scan_result.map(|r| r.has_uncommitted_changes).unwrap_or(false);
             let days = days_since_access(path).unwrap_or(0);
-            let signals = vec![
-                days > 180,        // Not recently accessed
-                !has_changes,      // No uncommitted changes
-                has_git,           // Has version control (safer to archive)
-            ];
+            let signals = vec![days > 180, !has_changes, has_git];
             intel.confidence = calculate_confidence(&signals);
             intel.evidence = vec![
                 if days > 180 { format!("✓ Not accessed in {} days", days) } else { format!("✗ Recently accessed ({} days ago)", days) },
@@ -1160,33 +1071,30 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
             intel.what_if_wrong = "If you still need this data, it remains in the Recovery Vault. Nothing is permanently deleted without your explicit confirmation.".to_string();
         }
         SafetyLevel::Safe => {
-            // Determine specific advisor info based on path
             if path_str.contains("docker") || path_str.contains("com.docker") {
-                let docker_running = is_docker_running();
-                let containers_active = if docker_running { has_running_containers() } else { false };
                 let signals = vec![
-                    !docker_running || !containers_active,
-                    true,  // Regenerates automatically
-                    true,  // No personal files
-                    !containers_active,
+                    !state.docker_running || !state.docker_containers_active,
+                    true,
+                    true,
+                    !state.docker_containers_active,
                 ];
                 intel.confidence = calculate_confidence(&signals);
                 intel.evidence = vec![
-                    if !docker_running { "✓ Docker is not running".to_string() } else if !containers_active { "✓ No active containers".to_string() } else { "✗ Active containers detected".to_string() },
+                    if !state.docker_running { "✓ Docker is not running".to_string() } else if !state.docker_containers_active { "✓ No active containers".to_string() } else { "✗ Active containers detected".to_string() },
                     "✓ Auto-generated cache — recreates on demand".to_string(),
                     "✓ No personal files — only downloaded images".to_string(),
-                    if !containers_active { "✓ No active dependencies".to_string() } else { "✗ Containers depend on this data".to_string() },
+                    if !state.docker_containers_active { "✓ No active dependencies".to_string() } else { "✗ Containers depend on this data".to_string() },
                 ];
                 intel.recommendation = "Clean".to_string();
                 intel.action_label = "Clean Cache".to_string();
-                intel.risk_level = if containers_active { "Low" } else { "None" }.to_string();
+                intel.risk_level = if state.docker_containers_active { "Low" } else { "None" }.to_string();
                 intel.time_to_rebuild = "1-5 minutes (re-downloads images on demand)".to_string();
                 intel.side_effects = "Docker will re-download container images when you need them next".to_string();
                 intel.why_here = "You build software. Docker stores container images, build layers, and cached dependencies. This grows every time you pull or build an image.".to_string();
                 intel.reasoning = vec![
                     "Regenerates automatically".to_string(),
                     "No personal files inside".to_string(),
-                    if !containers_active { "No active containers detected".to_string() } else { "Active containers detected — stop them first".to_string() },
+                    if !state.docker_containers_active { "No active containers detected".to_string() } else { "Active containers detected — stop them first".to_string() },
                 ];
                 intel.why_recommended = "RepairIQ verified this data regenerates automatically, contains no personal files, and has no active dependencies. Cleaning reclaims space with zero permanent loss.".to_string();
                 intel.what_if_wrong = "If our analysis is wrong, the Recovery Vault keeps this data for 14 days. You can restore it with one click.".to_string();
@@ -1213,13 +1121,8 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
                 intel.why_recommended = "RepairIQ verified this data regenerates automatically, contains no personal files, and has no active dependencies. Cleaning reclaims space with zero permanent loss.".to_string();
                 intel.what_if_wrong = "If our analysis is wrong, the Recovery Vault keeps this data for 14 days. You can restore it with one click.".to_string();
             } else if path_str.contains("deriveddata") {
-                let xcode_running = is_app_running("Xcode");
-                let signals = vec![
-                    !xcode_running,
-                    true, // Regenerates automatically
-                    true, // No personal files
-                    true, // Build output only
-                ];
+                let xcode_running = state.is_app_running("xcode");
+                let signals = vec![!xcode_running, true, true, true];
                 intel.confidence = calculate_confidence(&signals);
                 intel.evidence = vec![
                     if !xcode_running { "✓ Xcode is not running".to_string() } else { "✗ Xcode is currently open".to_string() },
@@ -1309,14 +1212,9 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
                 intel.what_if_wrong = "If our analysis is wrong, the Recovery Vault keeps this data for 14 days. You can restore it with one click.".to_string();
             } else if path_str.contains("/caches/") {
                 let app_name_lower = name.to_lowercase().replace("com.", "").replace('.', " ");
-                let app_running = is_app_running(&app_name_lower);
-                let days = last_modified_days(path).unwrap_or(999);
-                let signals = vec![
-                    !app_running,
-                    true,  // Regenerates automatically
-                    true,  // No personal files in caches
-                    days > 7,
-                ];
+                let app_running = state.is_app_running(&app_name_lower);
+                let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(999);
+                let signals = vec![!app_running, true, true, days > 7];
                 intel.confidence = calculate_confidence(&signals);
                 intel.evidence = vec![
                     if !app_running { "✓ App is not running".to_string() } else { "✗ App is currently running".to_string() },
@@ -1535,7 +1433,7 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
                 intel.why_recommended = "RepairIQ verified this data regenerates automatically, contains no personal files, and has no active dependencies. Cleaning reclaims space with zero permanent loss.".to_string();
                 intel.what_if_wrong = "If our analysis is wrong, the Recovery Vault keeps this data for 14 days. You can restore it with one click.".to_string();
             } else {
-                let days = last_modified_days(path).unwrap_or(999);
+                let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(999);
                 let signals = vec![true, true, days > 7];
                 intel.confidence = calculate_confidence(&signals);
                 intel.evidence = vec![
@@ -1581,7 +1479,7 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
                 intel.why_recommended = "This appears to be inactive personal data. RepairIQ recommends reviewing before removal, because this content may not be re-downloadable.".to_string();
                 intel.what_if_wrong = "If you still need this data, it remains in the Recovery Vault. Nothing is permanently deleted without your explicit confirmation.".to_string();
             } else if path_str.contains("coresimulator") {
-                let xcode_running = is_app_running("Xcode");
+                let xcode_running = state.is_app_running("xcode");
                 let signals = vec![!xcode_running, true, true];
                 intel.confidence = calculate_confidence(&signals);
                 intel.evidence = vec![
@@ -1603,9 +1501,9 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
                 intel.why_recommended = "RepairIQ verified this data can be re-downloaded but requires significant time. Review whether you actively use iOS simulators.".to_string();
                 intel.what_if_wrong = "If you still need this data, it remains in the Recovery Vault. Nothing is permanently deleted without your explicit confirmation.".to_string();
             } else if path_str.contains("/application support/") {
-                let days = last_modified_days(path).unwrap_or(0);
+                let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(0);
                 let app_name_lower = name.to_lowercase().replace("com.", "").replace('.', " ");
-                let app_running = is_app_running(&app_name_lower);
+                let app_running = state.is_app_running(&app_name_lower);
                 let signals = vec![!app_running, days > 30];
                 intel.confidence = calculate_confidence(&signals);
                 intel.evidence = vec![
@@ -1626,7 +1524,7 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
                 intel.why_recommended = "This appears to be inactive personal data. RepairIQ recommends reviewing before removal, because this content contains app settings that cannot be auto-regenerated.".to_string();
                 intel.what_if_wrong = "If you still need this data, it remains in the Recovery Vault. Nothing is permanently deleted without your explicit confirmation.".to_string();
             } else {
-                let days = last_modified_days(path).unwrap_or(0);
+                let days = scan_result.and_then(|r| r.most_recent_days).unwrap_or(0);
                 let signals = vec![days > 30];
                 intel.confidence = calculate_confidence(&signals);
                 intel.evidence = vec![
@@ -1653,23 +1551,27 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str) -> Ite
     intel
 }
 
-/// Scan a specific directory and return items
-fn scan_directory(base_path: &Path, category: &str, subcategory: &str) -> Vec<ScannedItem> {
-    let mut items = Vec::new();
 
+// ============================================================
+// PARALLEL SCAN — uses rayon for directory-level parallelism
+// ============================================================
+
+/// Scan a specific directory and return items — PARALLEL per entry
+fn scan_directory(base_path: &Path, category: &str, subcategory: &str, state: &SystemState) -> Vec<ScannedItem> {
     if !base_path.exists() {
-        return items;
+        return Vec::new();
     }
 
-    let entries = match fs::read_dir(base_path) {
-        Ok(entries) => entries,
-        Err(_) => return items,
+    let entries: Vec<_> = match fs::read_dir(base_path) {
+        Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
+        Err(_) => return Vec::new(),
     };
 
-    // Track small files by extension for grouping
+    // Separate entries into directories and small files for grouping
+    let mut dir_entries: Vec<fs::DirEntry> = Vec::new();
     let mut small_files_by_type: HashMap<String, Vec<(PathBuf, u64)>> = HashMap::new();
 
-    for entry in entries.flatten() {
+    for entry in entries {
         let path = entry.path();
         let name = path
             .file_name()
@@ -1677,6 +1579,7 @@ fn scan_directory(base_path: &Path, category: &str, subcategory: &str) -> Vec<Sc
             .to_string_lossy()
             .to_string();
 
+        // Skip hidden files unless they're special
         if name.starts_with('.')
             && !name.starts_with(".Trash")
             && !name.starts_with(".docker")
@@ -1685,74 +1588,96 @@ fn scan_directory(base_path: &Path, category: &str, subcategory: &str) -> Vec<Sc
             continue;
         }
 
-        let size_bytes = if path.is_dir() {
-            dir_size(&path, 50)
+        if path.is_dir() {
+            dir_entries.push(entry);
         } else {
-            entry.metadata().map(|m| m.len()).unwrap_or(0)
-        };
-
-        // Group small files by extension instead of skipping them
-        if size_bytes < 1_048_576 && !path.is_dir() {
-            let ext = path.extension()
-                .map(|e| e.to_string_lossy().to_lowercase())
-                .unwrap_or_else(|| "other".to_string());
-            small_files_by_type.entry(ext).or_default().push((path, size_bytes));
-            continue;
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if size < 1_048_576 {
+                // Group small files by extension
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_else(|| "other".to_string());
+                small_files_by_type.entry(ext).or_default().push((path, size));
+            } else {
+                // Large files get treated like directories
+                dir_entries.push(entry);
+            }
         }
-
-        if size_bytes < 1_048_576 {
-            continue;
-        }
-
-        let intel = fill_advisor_fields(analyze_path(&path, category), &path, category);
-        let last_accessed_days = days_since_access(&path);
-
-        // Gather file intelligence
-        let (file_count, largest_files) = if path.is_dir() {
-            (count_files(&path), get_largest_files(&path, 5))
-        } else {
-            (1, vec![])
-        };
-
-        items.push(ScannedItem {
-            path: path.to_string_lossy().to_string(),
-            name,
-            size_bytes,
-            category: category.to_string(),
-            subcategory: subcategory.to_string(),
-            safety: intel.safety,
-            safety_score: intel.safety_score,
-            last_accessed_days,
-            description: intel.description,
-            impact: intel.impact,
-            recovery_method: intel.recovery_method,
-            owner: intel.owner,
-            verdict: intel.verdict,
-            verdict_reason: intel.verdict_reason,
-            file_count,
-            largest_files,
-            depends_on: intel.depends_on,
-            clean_command: intel.clean_command,
-            recommendation: intel.recommendation,
-            action_label: intel.action_label,
-            risk_level: intel.risk_level,
-            time_to_rebuild: intel.time_to_rebuild,
-            side_effects: intel.side_effects,
-            why_here: intel.why_here,
-            reasoning: intel.reasoning,
-            confidence: intel.confidence,
-            evidence: intel.evidence,
-            why_recommended: intel.why_recommended,
-            what_if_wrong: intel.what_if_wrong,
-        });
     }
+
+    // Process directories/large files in PARALLEL using rayon
+    let mut items: Vec<ScannedItem> = dir_entries
+        .par_iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            // Single-pass walk for directories
+            let (size_bytes, file_count, largest_files_raw, scan_result) = if path.is_dir() {
+                let result = walk_directory_once(&path);
+                let size = result.total_size;
+                let fc = result.file_count;
+                let lf = result.largest_files.clone();
+                (size, fc, lf, Some(result))
+            } else {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                (size, 1u64, vec![], None)
+            };
+
+            // Skip items < 1MB
+            if size_bytes < 1_048_576 {
+                return None;
+            }
+
+            let intel = analyze_path(&path, category, state, scan_result.as_ref());
+            let intel = fill_advisor_fields(intel, &path, category, state, scan_result.as_ref());
+            let last_accessed_days = days_since_access(&path);
+            let largest_files = format_largest_files(&largest_files_raw);
+
+            Some(ScannedItem {
+                path: path.to_string_lossy().to_string(),
+                name,
+                size_bytes,
+                category: category.to_string(),
+                subcategory: subcategory.to_string(),
+                safety: intel.safety,
+                safety_score: intel.safety_score,
+                last_accessed_days,
+                description: intel.description,
+                impact: intel.impact,
+                recovery_method: intel.recovery_method,
+                owner: intel.owner,
+                verdict: intel.verdict,
+                verdict_reason: intel.verdict_reason,
+                file_count,
+                largest_files,
+                depends_on: intel.depends_on,
+                clean_command: intel.clean_command,
+                recommendation: intel.recommendation,
+                action_label: intel.action_label,
+                risk_level: intel.risk_level,
+                time_to_rebuild: intel.time_to_rebuild,
+                side_effects: intel.side_effects,
+                why_here: intel.why_here,
+                reasoning: intel.reasoning,
+                confidence: intel.confidence,
+                evidence: intel.evidence,
+                why_recommended: intel.why_recommended,
+                what_if_wrong: intel.what_if_wrong,
+            })
+        })
+        .collect();
 
     // Now create grouped items for small files (only if group total > 5MB)
     for (ext, files) in &small_files_by_type {
         let total_size: u64 = files.iter().map(|(_, s)| *s).sum();
         let count = files.len();
 
-        // Only show groups that are collectively significant (> 5MB)
         if total_size < 5_242_880 {
             continue;
         }
@@ -1779,19 +1704,29 @@ fn scan_directory(base_path: &Path, category: &str, subcategory: &str) -> Vec<Sc
                      format!("These are {} image files totaling {}. Many may be screenshots you no longer need. Review before bulk-deleting.", count, format_size(total_size)))
                 } else {
                     (SafetyLevel::Review, 5,
-                     "⚠️ REVIEW — Check if you need these".into(),
+                     "⚠️ REVIEW — Check if you need these".to_string(),
                      format!("{} image files. May include personal photos.", count))
                 }
             }
             "zip" | "gz" | "tar" | "rar" | "7z" | "dmg" => {
                 (SafetyLevel::Safe, 8,
                  format!("✅ YES — {} old archives/installers", count),
-                 format!("These are compressed archives and installer packages. Usually one-time-use files you've already extracted or installed."))
+                 "These are compressed archives and installer packages. Usually one-time-use files you've already extracted or installed.".to_string())
             }
             "mp4" | "mov" | "avi" | "mkv" => {
                 (SafetyLevel::Review, 4,
                  format!("⚠️ REVIEW — {} video files ({})", count, format_size(total_size)),
                  "Video files may be personal recordings or downloads. Check before removing.".to_string())
+            }
+            "mp3" | "wav" | "flac" | "m4a" | "aac" => {
+                (SafetyLevel::Review, 4,
+                 format!("⚠️ REVIEW — {} audio files ({})", count, format_size(total_size)),
+                 "Audio files may be personal music or recordings. Check before removing.".to_string())
+            }
+            "pdf" => {
+                (SafetyLevel::Review, 5,
+                 format!("⚠️ REVIEW — {} PDF documents", count),
+                 "PDF documents may contain important information. Review before removing.".to_string())
             }
             _ => {
                 (SafetyLevel::Review, 5,
@@ -1802,8 +1737,8 @@ fn scan_directory(base_path: &Path, category: &str, subcategory: &str) -> Vec<Sc
 
         let description = format!("{} .{} files totaling {}", count, ext, format_size(total_size));
 
-        // Get some example file names
-        let examples: Vec<String> = files.iter()
+        let examples: Vec<String> = files
+            .iter()
             .take(5)
             .map(|(p, s)| {
                 let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -1863,25 +1798,71 @@ fn scan_directory(base_path: &Path, category: &str, subcategory: &str) -> Vec<Sc
     items
 }
 
-/// Format size for display in descriptions
-fn format_size(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
-    } else if bytes >= 1_048_576 {
-        format!("{:.0} MB", bytes as f64 / 1_048_576.0)
-    } else {
-        format!("{:.0} KB", bytes as f64 / 1024.0)
-    }
+// ============================================================
+// PUBLIC API — same interface as before
+// ============================================================
+
+/// Public wrappers for lib.rs drill-down
+pub fn classify_item(path: &Path) -> SafetyLevel {
+    let state = SystemState::detect();
+    analyze_path(path, "", &state, None).safety
 }
 
-/// Main scan function
+pub fn describe_item(path: &Path) -> String {
+    let state = SystemState::detect();
+    analyze_path(path, "", &state, None).description
+}
+
+pub fn get_item_intel(
+    path: &Path,
+    category: &str,
+) -> (
+    SafetyLevel, u8, String, String, String, String, String, String,
+    Vec<String>, String, String, String, String, String, String, String,
+    Vec<String>, u8, Vec<String>, String, String,
+) {
+    let state = SystemState::detect();
+    let intel = fill_advisor_fields(
+        analyze_path(path, category, &state, None),
+        path,
+        category,
+        &state,
+        None,
+    );
+    (
+        intel.safety,
+        intel.safety_score,
+        intel.description,
+        intel.impact,
+        intel.recovery_method,
+        intel.owner,
+        intel.verdict,
+        intel.verdict_reason,
+        intel.depends_on,
+        intel.clean_command,
+        intel.recommendation,
+        intel.action_label,
+        intel.risk_level,
+        intel.time_to_rebuild,
+        intel.side_effects,
+        intel.why_here,
+        intel.reasoning,
+        intel.confidence,
+        intel.evidence,
+        intel.why_recommended,
+        intel.what_if_wrong,
+    )
+}
+
+/// Main scan function — PARALLEL across all targets
 pub fn perform_scan() -> ScanResult {
     let start = std::time::Instant::now();
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/Users/default"));
 
     let (total_bytes, used_bytes, free_bytes) = get_disk_info();
 
-    let mut all_items: Vec<ScannedItem> = Vec::new();
+    // System state checked ONCE
+    let state = SystemState::detect();
 
     let scan_targets: Vec<(&str, &str, PathBuf)> = vec![
         ("System Data", "Caches", home.join("Library/Caches")),
@@ -1901,10 +1882,107 @@ pub fn perform_scan() -> ScanResult {
         ("Trash", "Trash", home.join(".Trash")),
     ];
 
-    for (category, subcategory, path) in &scan_targets {
-        let items = scan_directory(path, category, subcategory);
+    // Scan all targets in PARALLEL
+    let all_items: Vec<ScannedItem> = scan_targets
+        .par_iter()
+        .flat_map(|(category, subcategory, path)| {
+            scan_directory(path, category, subcategory, &state)
+        })
+        .collect();
+
+    let safe_recovery_bytes: u64 = all_items
+        .iter()
+        .filter(|i| i.safety == SafetyLevel::Safe)
+        .map(|i| i.size_bytes)
+        .sum();
+
+    let review_recovery_bytes: u64 = all_items
+        .iter()
+        .filter(|i| i.safety == SafetyLevel::Review)
+        .map(|i| i.size_bytes)
+        .sum();
+
+    let archive_recovery_bytes: u64 = all_items
+        .iter()
+        .filter(|i| i.safety == SafetyLevel::Archive)
+        .map(|i| i.size_bytes)
+        .sum();
+
+    let mut category_map: HashMap<String, Vec<ScannedItem>> = HashMap::new();
+    for item in &all_items {
+        category_map
+            .entry(item.category.clone())
+            .or_default()
+            .push(item.clone());
+    }
+
+    let mut categories: Vec<CategoryBreakdown> = category_map
+        .into_iter()
+        .map(|(name, items)| {
+            let size_bytes = items.iter().map(|i| i.size_bytes).sum();
+            CategoryBreakdown { name, size_bytes, items }
+        })
+        .collect();
+
+    categories.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+
+    let mut all_items = all_items;
+    all_items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+
+    let scan_duration_ms = start.elapsed().as_millis() as u64;
+
+    ScanResult {
+        total_bytes,
+        used_bytes,
+        free_bytes,
+        safe_recovery_bytes,
+        review_recovery_bytes,
+        archive_recovery_bytes,
+        categories,
+        items: all_items,
+        scan_duration_ms,
+    }
+}
+
+/// Scan with progress reporting — emits progress messages via callback
+pub fn perform_scan_with_progress(progress: impl Fn(String)) -> ScanResult {
+    let start = std::time::Instant::now();
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/Users/default"));
+
+    let (total_bytes, used_bytes, free_bytes) = get_disk_info();
+
+    progress("Checking system state...".to_string());
+    let state = SystemState::detect();
+
+    let scan_targets: Vec<(&str, &str, PathBuf)> = vec![
+        ("System Data", "Caches", home.join("Library/Caches")),
+        ("System Data", "Application Support", home.join("Library/Application Support")),
+        ("System Data", "Logs", home.join("Library/Logs")),
+        ("System Data", "Saved State", home.join("Library/Saved Application State")),
+        ("Developer", "Xcode DerivedData", home.join("Library/Developer/Xcode/DerivedData")),
+        ("Developer", "Xcode Archives", home.join("Library/Developer/Xcode/Archives")),
+        ("Developer", "CoreSimulator", home.join("Library/Developer/CoreSimulator")),
+        ("Developer", "Cargo Registry", home.join(".cargo/registry")),
+        ("Developer", "npm Cache", home.join(".npm")),
+        ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
+        ("Downloads", "Downloads", home.join("Downloads")),
+        ("Documents", "Documents", home.join("Documents")),
+        ("Desktop", "Desktop", home.join("Desktop")),
+        ("Applications", "Applications", PathBuf::from("/Applications")),
+        ("Trash", "Trash", home.join(".Trash")),
+    ];
+
+    let total_targets = scan_targets.len();
+    let mut all_items: Vec<ScannedItem> = Vec::new();
+
+    // Sequential progress reporting, but parallel within each target
+    for (i, (category, subcategory, path)) in scan_targets.iter().enumerate() {
+        progress(format!("Scanning {}... ({}/{})", category, i + 1, total_targets));
+        let items = scan_directory(path, category, subcategory, &state);
         all_items.extend(items);
     }
+
+    progress("Calculating results...".to_string());
 
     let safe_recovery_bytes: u64 = all_items
         .iter()
@@ -1944,6 +2022,8 @@ pub fn perform_scan() -> ScanResult {
     all_items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
 
     let scan_duration_ms = start.elapsed().as_millis() as u64;
+
+    progress(format!("Done! Scanned in {}ms", scan_duration_ms));
 
     ScanResult {
         total_bytes,
