@@ -2587,3 +2587,212 @@ body {
   80% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+
+/* ===== HEALTH SCORE ===== */
+.health-score-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.health-score-circle {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  border: 2px solid var(--border);
+  flex-shrink: 0;
+}
+
+.health-grade {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.grade-aplus, .grade-a { color: var(--safe); border-color: var(--safe) !important; }
+.grade-b { color: #22d3ee; border-color: #22d3ee !important; }
+.grade-c { color: var(--review); border-color: var(--review) !important; }
+.grade-d, .grade-f { color: var(--danger); border-color: var(--danger) !important; }
+
+.health-score-circle:has(.grade-aplus), .health-score-circle:has(.grade-a) { border-color: var(--safe); }
+.health-score-circle:has(.grade-b) { border-color: #22d3ee; }
+.health-score-circle:has(.grade-c) { border-color: var(--review); }
+.health-score-circle:has(.grade-d), .health-score-circle:has(.grade-f) { border-color: var(--danger); }
+
+.health-score-info {
+  flex: 1;
+}
+
+.health-score-title {
+  font-size: 13px;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.health-factors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.health-factor {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-primary);
+}
+
+.factor-good { color: var(--safe); }
+.factor-bad { color: var(--review); }
+
+/* ===== DUPLICATES VIEW ===== */
+.duplicates-view, .browsers-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.duplicates-header, .browsers-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.duplicates-header h2, .browsers-header h2 {
+  font-size: 18px;
+}
+
+.duplicates-sub, .browsers-sub {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.scan-dupes-btn, .scan-browsers-btn {
+  padding: 8px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.scan-dupes-btn:disabled, .scan-browsers-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.duplicates-empty, .browsers-empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-muted);
+}
+
+.duplicates-stats, .browsers-stats {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.dupes-wasted {
+  margin-left: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.duplicates-list, .browsers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.duplicate-group {
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.dupe-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.dupe-name {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+}
+
+.dupe-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dupe-wasted {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.dupe-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dupe-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.browser-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.browser-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.browser-size {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.browser-command {
+  font-size: 10px;
+  color: var(--safe);
+  background: var(--bg-primary);
+  padding: 3px 6px;
+  border-radius: 4px;
+}

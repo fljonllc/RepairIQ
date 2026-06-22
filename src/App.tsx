@@ -7,11 +7,15 @@ import {
   FolderArchive,
   Settings as SettingsIcon,
   RefreshCw,
+  Copy,
+  Globe,
 } from "lucide-react";
 import { Dashboard } from "./components/Dashboard";
 import { Explorer } from "./components/Explorer";
 import { Vault } from "./components/Vault";
 import { SmartArchive } from "./components/SmartArchive";
+import { Duplicates } from "./components/Duplicates";
+import { Browsers } from "./components/Browsers";
 import { Settings, DEFAULT_SETTINGS } from "./components/Settings";
 import type { AppSettings } from "./components/Settings";
 import { Treemap } from "./components/Treemap";
@@ -283,6 +287,18 @@ function App() {
             <FolderArchive size={18} /> Smart Archive
             <kbd className="nav-shortcut">⌘4</kbd>
           </button>
+          <button
+            className={`nav-btn ${view === "duplicates" ? "active" : ""}`}
+            onClick={() => setView("duplicates")}
+          >
+            <Copy size={18} /> Duplicates
+          </button>
+          <button
+            className={`nav-btn ${view === "browsers" ? "active" : ""}`}
+            onClick={() => setView("browsers")}
+          >
+            <Globe size={18} /> Browsers
+          </button>
 
           <div className="nav-divider" />
 
@@ -433,6 +449,12 @@ function App() {
             onToast={addToast}
           />
         )}
+
+        {/* Duplicates View */}
+        {view === "duplicates" && <Duplicates />}
+
+        {/* Browsers View */}
+        {view === "browsers" && <Browsers />}
 
         {/* Settings View */}
         {view === "settings" && (

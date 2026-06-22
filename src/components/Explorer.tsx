@@ -132,9 +132,14 @@ export function Explorer({
       ? result.items.filter((i) => i.category === selectedCategory)
       : result.items;
 
-  // Safe items that can be batch cleaned
+  // Safe items that can be batch cleaned (exclude apps and paths needing root)
   const safeItems = currentItems.filter(
-    (i) => i.safety === "Safe" && i.safety_score >= 8
+    (i) =>
+      i.safety === "Safe" &&
+      i.safety_score >= 8 &&
+      i.category !== "Applications" &&
+      !i.path.startsWith("/Applications") &&
+      i.recommendation === "Clean"
   );
   const safeTotalBytes = safeItems.reduce((sum, i) => sum + i.size_bytes, 0);
 
@@ -253,7 +258,7 @@ export function Explorer({
                       >
                         <FolderOpen size={14} />
                       </button>
-                      {item.safety !== "Protected" && (
+                      {item.safety !== "Protected" && !item.path.startsWith("/Applications") && (
                         <button
                           className="vault-btn"
                           onClick={(e) => {

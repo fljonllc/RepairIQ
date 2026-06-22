@@ -80,6 +80,9 @@ pub struct ScanResult {
     pub categories: Vec<CategoryBreakdown>,
     pub items: Vec<ScannedItem>,
     pub scan_duration_ms: u64,
+    pub health_score: u8,
+    pub health_grade: String,
+    pub health_factors: Vec<String>,
 }
 
 // ============================================================
@@ -1964,6 +1967,71 @@ pub fn get_item_intel(
     )
 }
 
+// ============================================================
+// HEALTH SCORE CALCULATION
+// ============================================================
+
+fn calculate_health_score(result: &ScanResult, total: u64, free: u64) -> (u8, String, Vec<String>) {
+    let mut score: i32 = 100;
+    let mut factors = Vec::new();
+
+    let free_pct = if total > 0 {
+        (free as f64 / total as f64 * 100.0) as u32
+    } else {
+        100
+    };
+
+    if free_pct < 5 {
+        score -= 40;
+        factors.push("Critical: Less than 5% free space".to_string());
+    } else if free_pct < 10 {
+        score -= 25;
+        factors.push("Low: Less than 10% free space".to_string());
+    } else if free_pct < 20 {
+        score -= 10;
+        factors.push("Below recommended 20% free space".to_string());
+    } else {
+        factors.push("✓ Healthy free space level".to_string());
+    }
+
+    // Safe recovery as % of total
+    let safe_pct = if total > 0 {
+        (result.safe_recovery_bytes as f64 / total as f64 * 100.0) as u32
+    } else {
+        0
+    };
+    if safe_pct > 15 {
+        score -= 20;
+        factors.push(format!("{}% of disk is cleanable cache data", safe_pct));
+    } else if safe_pct > 5 {
+        score -= 10;
+        factors.push(format!("{}% cleanable data accumulated", safe_pct));
+    } else {
+        factors.push("✓ Minimal cleanable data".to_string());
+    }
+
+    // Archive items (old stuff hanging around)
+    let archive_count = result.items.iter().filter(|i| i.safety == SafetyLevel::Archive).count();
+    if archive_count > 5 {
+        score -= 10;
+        factors.push(format!("{} items should be archived", archive_count));
+    } else {
+        factors.push("✓ No stale items detected".to_string());
+    }
+
+    let score = score.max(0).min(100) as u8;
+    let grade = match score {
+        95..=100 => "A+",
+        85..=94 => "A",
+        70..=84 => "B",
+        55..=69 => "C",
+        40..=54 => "D",
+        _ => "F",
+    }.to_string();
+
+    (score, grade, factors)
+}
+
 /// Main scan function — PARALLEL across all targets
 pub fn perform_scan() -> ScanResult {
     let start = std::time::Instant::now();
@@ -2044,7 +2112,7 @@ pub fn perform_scan() -> ScanResult {
 
     let scan_duration_ms = start.elapsed().as_millis() as u64;
 
-    ScanResult {
+    let mut result = ScanResult {
         total_bytes,
         used_bytes,
         free_bytes,
@@ -2054,7 +2122,17 @@ pub fn perform_scan() -> ScanResult {
         categories,
         items: all_items,
         scan_duration_ms,
-    }
+        health_score: 0,
+        health_grade: String::new(),
+        health_factors: Vec::new(),
+    };
+
+    let (score, grade, factors) = calculate_health_score(&result, total_bytes, free_bytes);
+    result.health_score = score;
+    result.health_grade = grade;
+    result.health_factors = factors;
+
+    result
 }
 
 /// Scan with progress reporting — emits progress messages via callback
@@ -2141,7 +2219,7 @@ pub fn perform_scan_with_progress(progress: impl Fn(String)) -> ScanResult {
 
     progress(format!("Done! Scanned in {}ms", scan_duration_ms));
 
-    ScanResult {
+    let mut result = ScanResult {
         total_bytes,
         used_bytes,
         free_bytes,
@@ -2151,5 +2229,15 @@ pub fn perform_scan_with_progress(progress: impl Fn(String)) -> ScanResult {
         categories,
         items: all_items,
         scan_duration_ms,
-    }
+        health_score: 0,
+        health_grade: String::new(),
+        health_factors: Vec::new(),
+    };
+
+    let (score, grade, factors) = calculate_health_score(&result, total_bytes, free_bytes);
+    result.health_score = score;
+    result.health_grade = grade;
+    result.health_factors = factors;
+
+    result
 }

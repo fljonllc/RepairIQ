@@ -48,6 +48,9 @@ export interface ScanResult {
   categories: CategoryBreakdown[];
   items: ScannedItem[];
   scan_duration_ms: number;
+  health_score: number;
+  health_grade: string;
+  health_factors: string[];
 }
 
 export interface VaultItem {
@@ -76,4 +79,36 @@ export interface Toast {
   message: string;
 }
 
-export type View = "dashboard" | "explorer" | "vault" | "archive" | "settings";
+export type View = "dashboard" | "explorer" | "vault" | "archive" | "duplicates" | "browsers" | "settings";
+
+export interface DuplicateGroup {
+  hash: string;
+  file_name: string;
+  size_bytes: number;
+  count: number;
+  total_wasted: number;
+  paths: string[];
+}
+
+export interface BrowserCache {
+  browser: string;
+  size_bytes: number;
+  path: string;
+  clean_command: string;
+}
+
+export interface StorageForecast {
+  history: StorageSnapshot[];
+  days_until_full: number | null;
+  daily_growth_bytes: number;
+  weekly_growth_bytes: number;
+  total_cleaned_bytes: number;
+  total_cleaned_count: number;
+}
+
+export interface StorageSnapshot {
+  date: string;
+  used_bytes: number;
+  free_bytes: number;
+  total_bytes: number;
+}

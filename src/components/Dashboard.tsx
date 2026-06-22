@@ -139,6 +139,25 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
         </button>
       )}
 
+      {/* Health Score */}
+      <div className="health-score-card">
+        <div className="health-score-circle">
+          <span className={`health-grade grade-${result.health_grade.replace('+', 'plus').toLowerCase()}`}>
+            {result.health_grade}
+          </span>
+        </div>
+        <div className="health-score-info">
+          <span className="health-score-title">Storage Health</span>
+          <div className="health-factors">
+            {result.health_factors.map((factor, i) => (
+              <span key={i} className={`health-factor ${factor.startsWith("✓") ? "factor-good" : "factor-bad"}`}>
+                {factor}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* 1. Today's Opportunities */}
       {topOpportunities.length > 0 && (
         <div className="opportunities-section">
