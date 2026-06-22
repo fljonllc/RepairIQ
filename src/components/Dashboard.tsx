@@ -1,4 +1,4 @@
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import { useState, useEffect, useRef } from "react";
 import {
   Shield,
   AlertTriangle,
@@ -14,18 +14,33 @@ interface DashboardProps {
   result: ScanResult;
   onShowWhy: () => void;
   onMoveToVault?: (item: ScannedItem) => void;
+  onQuickClean?: (items: ScannedItem[]) => void;
 }
 
 const CATEGORY_COLORS = [
-    "#ef4444",
-    "#f59e0b",
-    "#10b981",
-    "#3b82f6",
-    "#8b5cf6",
-    "#ec4899",
-    "#14b8a6",
-    "#f97316",
-  ];
+  "#ef4444",
+  "#f59e0b",
+  "#10b981",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
+];
+
+const CATEGORY_NAMES: Record<string, string> = {
+  "System Data": "System & app caches",
+  Applications: "Applications you've installed",
+  Docker: "Docker containers & images",
+  Developer: "Developer tool caches",
+  "Virtual Machines": "Virtual machines",
+  Messages: "Messages & attachments",
+  Music: "Music & audio",
+  Downloads: "Downloaded files",
+  Documents: "Your documents",
+  Desktop: "Desktop files",
+  Trash: "Trash (ready to empty)",
+};
 
 function getRiskLabel(confidence: number): string {
   if (confidence >= 95) return "None";
@@ -35,22 +50,51 @@ function getRiskLabel(confidence: number): string {
   return "High";
 }
 
-export function Dashboard({ result, onShowWhy, onMoveToVault }: DashboardProps) {
-  const pieData = result.categories.map((cat) => ({
-    name: cat.name,
-    value: cat.size_bytes,
-  }));
-
+export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: DashboardProps) {
   const totalRecovery =
     result.safe_recovery_bytes +
     result.review_recovery_bytes +
     result.archive_recovery_bytes;
 
-  // Top 3 Opportunities: highest confidence + biggest size (safe items)
+  // Track previous free_bytes to show "+X freed" indicator
+  const prevFreeRef = useRef(result.free_bytes);
+  const [freedAmount, setFreedAmount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const diff = result.free_bytes - prevFreeRef.current;
+    if (diff > 0) {
+      setFreedAmount(diff);
+      const timer = setTimeout(() => setFreedAmount(null), 3000);
+      prevFreeRef.current = result.free_bytes;
+      return () => clearTimeout(timer);
+    }
+    prevFreeRef.current = result.free_bytes;
+  }, [result.free_bytes]);
+
+  // Quick Clean items: confidence >= 95, not Applications, not /Applications, recommendation === "Clean"
+  const quickCleanItems = result.items.filter(
+    (item) =>
+      item.confidence >= 95 &&
+      item.category !== "Applications" &&
+      !item.path.startsWith("/Applications") &&
+      item.recommendation === "Clean"
+  );
+
+  const quickCleanBytes = quickCleanItems.reduce((sum, item) => sum + item.size_bytes, 0);
+
+  // Top 3 Opportunities
   const topOpportunities = result.items
-    .filter((item) => item.safety === "Safe" && item.confidence >= 75)
+    .filter(
+      (item) =>
+        item.safety === "Safe" &&
+        item.confidence >= 80 &&
+        item.category !== "Applications" &&
+        item.category !== "Documents" &&
+        item.category !== "Desktop" &&
+        !item.path.startsWith("/Applications") &&
+        (item.recommendation === "Clean" || item.action_label === "Clean Cache")
+    )
     .sort((a, b) => {
-      // Sort by confidence first, then by size
       const confDiff = b.confidence - a.confidence;
       if (Math.abs(confDiff) > 5) return confDiff;
       return b.size_bytes - a.size_bytes;
@@ -65,9 +109,37 @@ export function Dashboard({ result, onShowWhy, onMoveToVault }: DashboardProps) 
     }
   };
 
+  const handleQuickClean = () => {
+    if (onQuickClean && quickCleanItems.length > 0) {
+      onQuickClean(quickCleanItems);
+    }
+  };
+
+  // Space breakdown: categories sorted by size descending
+  const sortedCategories = [...result.categories].sort(
+    (a, b) => b.size_bytes - a.size_bytes
+  );
+
+  // Total cleanable bytes (items with recommendation "Clean" and safety "Safe")
+  const totalCleanable = result.items
+    .filter((item) => item.safety === "Safe" && item.recommendation === "Clean")
+    .reduce((sum, item) => sum + item.size_bytes, 0);
+
   return (
     <div className="dashboard">
-      {/* 1. Today's Opportunities — FIRST, most prominent */}
+      {/* 0. Quick Clean Button — Top of dashboard */}
+      {quickCleanItems.length > 0 && (
+        <button className="quick-clean-btn" onClick={handleQuickClean}>
+          <div>
+            <span>⚡ Quick Clean — {formatBytes(quickCleanBytes)}</span>
+            <div className="quick-clean-sub">
+              Items scored 95%+ confidence. Zero risk.
+            </div>
+          </div>
+        </button>
+      )}
+
+      {/* 1. Today's Opportunities */}
       {topOpportunities.length > 0 && (
         <div className="opportunities-section">
           <h3 className="opportunities-header">
@@ -112,7 +184,7 @@ export function Dashboard({ result, onShowWhy, onMoveToVault }: DashboardProps) 
         </div>
       )}
 
-      {/* 2. Storage Overview (compact bar) */}
+      {/* 2. Storage Overview (animated bar) */}
       <div className="hero-card">
         <div className="hero-header">
           <HardDrive size={24} />
@@ -133,98 +205,73 @@ export function Dashboard({ result, onShowWhy, onMoveToVault }: DashboardProps) 
         </div>
         <div className="storage-labels">
           <span>Used: {formatBytes(result.used_bytes)}</span>
-          <span>Free: {formatBytes(result.free_bytes)}</span>
+          <span>
+            Free: {formatBytes(result.free_bytes)}
+            {freedAmount && (
+              <span className="freed-indicator"> +{formatBytes(freedAmount)} freed</span>
+            )}
+          </span>
           <span>Total: {formatBytes(result.total_bytes)}</span>
         </div>
       </div>
 
-      {/* 3. Recovery Summary (compact grid) */}
+      {/* 3. Recovery Summary (compact grid, no title) */}
       <div className="recovery-card">
-        <h3>Recovery Potential</h3>
         <div className="recovery-grid">
           <div className="recovery-item safe">
-            <Shield size={20} />
-            <span className="recovery-label">Safe Recovery</span>
+            <Shield size={16} />
+            <span className="recovery-label">Safe</span>
             <span className="recovery-value">
               {formatBytes(result.safe_recovery_bytes)}
             </span>
           </div>
           <div className="recovery-item review">
-            <AlertTriangle size={20} />
-            <span className="recovery-label">Review Recovery</span>
+            <AlertTriangle size={16} />
+            <span className="recovery-label">Review</span>
             <span className="recovery-value">
               {formatBytes(result.review_recovery_bytes)}
             </span>
           </div>
           <div className="recovery-item archive">
-            <Archive size={20} />
-            <span className="recovery-label">Archive Recovery</span>
+            <Archive size={16} />
+            <span className="recovery-label">Archive</span>
             <span className="recovery-value">
               {formatBytes(result.archive_recovery_bytes)}
             </span>
           </div>
           <div className="recovery-item total">
-            <HardDrive size={20} />
-            <span className="recovery-label">Total Potential</span>
+            <HardDrive size={16} />
+            <span className="recovery-label">Total</span>
             <span className="recovery-value">{formatBytes(totalRecovery)}</span>
           </div>
         </div>
-
-        <button className="show-why-btn" onClick={onShowWhy}>
-          Show Me Why →
-        </button>
       </div>
 
-      {/* 4. Storage Story — Category Breakdown */}
+      {/* 4. Where's Your Space Going? — Plain language breakdown */}
       <div className="story-card">
-        <h3>Storage Story</h3>
-        <div className="story-layout">
-          <div className="story-chart">
-            <ResponsiveContainer width="100%" height={180}>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={45}
-                  outerRadius={75}
-                  dataKey="value"
-                  paddingAngle={2}
-                >
-                  {pieData.map((_, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip
-                  formatter={(value) => formatBytes(Number(value))}
-                  contentStyle={{
-                    background: "#1e1e2e",
-                    border: "1px solid #333",
-                    borderRadius: "8px",
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="story-breakdown">
-            {result.categories.map((cat, i) => (
-              <div key={cat.name} className="story-row">
-                <span
-                  className="story-dot"
-                  style={{
-                    background: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
-                  }}
-                />
-                <span className="story-name">{cat.name}</span>
-                <span className="story-size">{formatBytes(cat.size_bytes)}</span>
-                <span className="story-count">{cat.items.length} items</span>
-              </div>
-            ))}
-          </div>
+        <h3 style={{ fontSize: "13px", marginBottom: "8px" }}>Where's your space going?</h3>
+        <div className="space-breakdown">
+          {sortedCategories.map((cat, i) => (
+            <div key={cat.name} className="space-row">
+              <span
+                className="story-dot"
+                style={{
+                  background: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
+                }}
+              />
+              <span className="space-row-name">
+                {CATEGORY_NAMES[cat.name] || cat.name}
+              </span>
+              <span className="space-row-size">{formatBytes(cat.size_bytes)}</span>
+            </div>
+          ))}
         </div>
+        {totalCleanable > 0 && (
+          <div className="space-cleanable" onClick={onShowWhy}>
+            <span className="space-cleanable-label">Things you can clean today</span>
+            <span className="space-cleanable-size">{formatBytes(totalCleanable)}</span>
+          </div>
+        )}
       </div>
     </div>
   );

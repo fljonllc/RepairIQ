@@ -903,6 +903,116 @@ fn analyze_path(path: &Path, category: &str, state: &SystemState, scan_result: O
         };
     }
 
+    // === VIRTUAL MACHINES ===
+    if category == "Virtual Machines" {
+        let days = days_since_access(path).unwrap_or(0);
+        let name_lower = name.to_lowercase();
+        let is_utm = name_lower.contains(".utm");
+
+        let (verdict, reason, score) = if days > 90 {
+            ("📦 ARCHIVE — VM not used in 3+ months".to_string(),
+             format!("This virtual machine hasn't been opened in {} days. It's taking significant space. Archive to external drive or delete if no longer needed.", days),
+             7u8)
+        } else if days > 30 {
+            ("⚠️ REVIEW — VM not used in {} days".to_string(),
+             format!("VM last used {} days ago. If you're done with this project, archiving frees major space.", days),
+             5)
+        } else {
+            ("⚠️ ACTIVE — Recently used VM".to_string(),
+             format!("Used {} days ago. This is an active virtual machine.", days),
+             3)
+        };
+
+        return ItemIntel {
+            description: format!("{} — Virtual Machine disk image", name),
+            impact: "The entire VM and its contents are removed. Any work inside the VM is lost.".into(),
+            recovery_method: "Cannot recover unless backed up. VMs must be recreated from scratch or restored from a backup.".into(),
+            owner: if is_utm { "UTM".to_string() } else { "Virtual Machine".to_string() },
+            safety_score: score,
+            safety: if score >= 7 { SafetyLevel::Archive } else { SafetyLevel::Review },
+            verdict,
+            verdict_reason: reason,
+            depends_on: vec!["UTM app".to_string()],
+            clean_command: String::new(),
+            ..Default::default()
+        };
+    }
+
+    // === MESSAGES ===
+    if category == "Messages" {
+        let is_attachments = name.to_lowercase().contains("attach") || name.to_lowercase().contains("media");
+        
+        let (verdict, reason, score) = if is_attachments {
+            ("⚠️ REVIEW — Message attachments".to_string(),
+             "These are photos, videos, and files people sent you via iMessage. Removing them clears them from Messages but they may not be recoverable.".to_string(),
+             4u8)
+        } else {
+            ("🚫 NO — Message database".to_string(),
+             "This contains your actual message history. Deleting it removes all your conversations permanently.".to_string(),
+             2)
+        };
+
+        return ItemIntel {
+            description: format!("{} — iMessage/SMS data", name),
+            impact: if is_attachments {
+                "Attachments (photos/videos sent to you) are removed from Messages. Text conversations remain.".into()
+            } else {
+                "ALL message history is permanently deleted. Cannot be undone.".into()
+            },
+            recovery_method: "Cannot recover. Messages are not re-downloadable. Only iCloud backup can restore them.".into(),
+            owner: "Messages / iMessage".to_string(),
+            safety_score: score,
+            safety: SafetyLevel::Review,
+            verdict,
+            verdict_reason: reason,
+            depends_on: vec!["Messages.app".to_string(), "iCloud".to_string()],
+            clean_command: String::new(),
+            ..Default::default()
+        };
+    }
+
+    // === MUSIC ===
+    if category == "Music" {
+        let days = days_since_access(path).unwrap_or(0);
+        let name_lower = name.to_lowercase();
+        let is_garageband = name_lower.contains("garageband");
+        let is_logic = name_lower.contains("logic");
+
+        let (verdict, reason, score) = if is_garageband || is_logic {
+            if days > 180 {
+                ("📦 ARCHIVE — Old music project".to_string(),
+                 format!("This {} project hasn't been opened in {} days. Archive to external drive to free space.", if is_garageband { "GarageBand" } else { "Logic Pro" }, days),
+                 6u8)
+            } else {
+                ("⚠️ REVIEW — Music production project".to_string(),
+                 "This contains your music production work. Only remove if you have a backup.".to_string(),
+                 3)
+            }
+        } else if days > 180 {
+            ("⚠️ REVIEW — Not accessed in 6+ months".to_string(),
+             format!("Music file/folder not accessed in {} days. Check if you still listen to this.", days),
+             5)
+        } else {
+            ("⚠️ ACTIVE — Your music library".to_string(),
+             "This is part of your active music collection.".to_string(),
+             3)
+        };
+
+        return ItemIntel {
+            description: format!("{} — Music library content", name),
+            impact: "Music files or projects are removed. Downloaded music can be re-downloaded from Apple Music. Original recordings cannot.".into(),
+            recovery_method: "Apple Music tracks re-download automatically. Original recordings need a backup.".into(),
+            owner: "Music / Apple Music".to_string(),
+            safety_score: score,
+            safety: if score >= 6 { SafetyLevel::Archive } else { SafetyLevel::Review },
+            verdict,
+            verdict_reason: reason,
+            depends_on: vec!["Music.app".to_string()],
+            clean_command: String::new(),
+            ..Default::default()
+        };
+    }
+
     // === DOWNLOADS ===
     if category == "Downloads" {
         let days = days_since_access(path).unwrap_or(0);
@@ -1876,6 +1986,9 @@ pub fn perform_scan() -> ScanResult {
         ("Developer", "npm Cache", home.join(".npm")),
         ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
         ("Downloads", "Downloads", home.join("Downloads")),
+        ("Virtual Machines", "UTM VMs", home.join("Library/Containers/com.utmapp.UTM/Data/Documents")),
+        ("Messages", "Messages Data", home.join("Library/Messages")),
+        ("Music", "Music Library", home.join("Music")),
         ("Documents", "Documents", home.join("Documents")),
         ("Desktop", "Desktop", home.join("Desktop")),
         ("Applications", "Applications", PathBuf::from("/Applications")),
@@ -1966,6 +2079,9 @@ pub fn perform_scan_with_progress(progress: impl Fn(String)) -> ScanResult {
         ("Developer", "npm Cache", home.join(".npm")),
         ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
         ("Downloads", "Downloads", home.join("Downloads")),
+        ("Virtual Machines", "UTM VMs", home.join("Library/Containers/com.utmapp.UTM/Data/Documents")),
+        ("Messages", "Messages Data", home.join("Library/Messages")),
+        ("Music", "Music Library", home.join("Music")),
         ("Documents", "Documents", home.join("Documents")),
         ("Desktop", "Desktop", home.join("Desktop")),
         ("Applications", "Applications", PathBuf::from("/Applications")),

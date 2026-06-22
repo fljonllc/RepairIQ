@@ -267,6 +267,78 @@ pub fn purge_expired() -> Result<u64, String> {
     Ok(freed)
 }
 
+/// Permanently delete ALL items in the vault — reclaim all space now
+pub fn purge_all() -> Result<u64, String> {
+    let db = db_path();
+    if !db.exists() {
+        return Ok(0);
+    }
+
+    let conn = Connection::open(&db).map_err(|e| format!("Failed to open DB: {}", e))?;
+
+    // Get ALL vault items
+    let mut stmt = conn
+        .prepare("SELECT vault_path, size_bytes FROM vault_items")
+        .map_err(|e| format!("Failed to prepare: {}", e))?;
+
+    let items: Vec<(String, u64)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|e| format!("Failed to query: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut freed: u64 = 0;
+    for (vault_path, size) in &items {
+        let p = Path::new(vault_path.as_str());
+        if p.exists() {
+            if p.is_dir() {
+                let _ = fs::remove_dir_all(p);
+            } else {
+                let _ = fs::remove_file(p);
+            }
+            freed += size;
+        } else {
+            freed += size; // Count it as freed even if file already gone
+        }
+    }
+
+    // Clear the entire table
+    conn.execute("DELETE FROM vault_items", [])
+        .map_err(|e| format!("Failed to clear vault: {}", e))?;
+
+    Ok(freed)
+}
+
+/// Permanently delete a single vault item by ID
+pub fn delete_permanently(id: i64) -> Result<u64, String> {
+    let db = db_path();
+    let conn = Connection::open(&db).map_err(|e| format!("Failed to open DB: {}", e))?;
+
+    let (vault_path, size_bytes): (String, u64) = conn
+        .query_row(
+            "SELECT vault_path, size_bytes FROM vault_items WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| format!("Vault item not found: {}", e))?;
+
+    // Delete the actual files
+    let p = Path::new(&vault_path);
+    if p.exists() {
+        if p.is_dir() {
+            fs::remove_dir_all(p).map_err(|e| format!("Failed to delete: {}", e))?;
+        } else {
+            fs::remove_file(p).map_err(|e| format!("Failed to delete: {}", e))?;
+        }
+    }
+
+    // Remove from database
+    conn.execute("DELETE FROM vault_items WHERE id = ?1", params![id])
+        .map_err(|e| format!("Failed to remove record: {}", e))?;
+
+    Ok(size_bytes)
+}
+
 // Helper: recursive directory copy
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| format!("mkdir failed: {}", e))?;

@@ -204,6 +204,28 @@ function App() {
     }
   }, [purgeExpired, addToast]);
 
+  const handlePurgeAll = useCallback(async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const freed = await invoke<number>("vault_purge_all");
+      addToast("success", `Vault emptied — ${formatBytes(freed)} permanently freed`);
+      await listVault();
+    } catch (e) {
+      addToast("error", `Failed to empty vault: ${String(e)}`);
+    }
+  }, [addToast, listVault]);
+
+  const handleDeletePermanently = useCallback(async (id: number) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const freed = await invoke<number>("vault_delete_permanently", { id });
+      addToast("success", `Permanently deleted — ${formatBytes(freed)} freed`);
+      await listVault();
+    } catch (e) {
+      addToast("error", `Delete failed: ${String(e)}`);
+    }
+  }, [addToast, listVault]);
+
   const handleSaveSettings = useCallback(
     (newSettings: AppSettings) => {
       setSettings(newSettings);
@@ -343,7 +365,7 @@ function App() {
 
         {/* Dashboard View */}
         {!scanning && scanResult && view === "dashboard" && (
-          <Dashboard result={scanResult} onShowWhy={() => setView("explorer")} onMoveToVault={requestMoveToVault} />
+          <Dashboard result={scanResult} onShowWhy={() => setView("explorer")} onMoveToVault={requestMoveToVault} onQuickClean={handleBatchClean} />
         )}
 
         {/* Explorer View */}
@@ -393,6 +415,8 @@ function App() {
             loading={vaultLoading}
             onRestore={handleRestore}
             onPurge={handlePurge}
+            onPurgeAll={handlePurgeAll}
+            onDeletePermanently={handleDeletePermanently}
           />
         )}
 

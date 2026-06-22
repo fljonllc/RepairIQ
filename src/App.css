@@ -261,7 +261,7 @@ body {
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .hero-card,
@@ -270,7 +270,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 12px 14px;
 }
 
 .hero-header {
@@ -333,8 +333,8 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 10px 8px;
+  gap: 2px;
+  padding: 8px 6px;
   background: var(--bg-primary);
   border-radius: 8px;
   text-align: center;
@@ -387,7 +387,7 @@ body {
 }
 
 .story-chart {
-  width: 180px;
+  width: 150px;
   flex-shrink: 0;
 }
 
@@ -1171,6 +1171,50 @@ body {
 
 .purge-btn:hover {
   opacity: 0.9;
+}
+
+.purge-all-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--danger);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.purge-all-btn:hover {
+  opacity: 0.9;
+}
+
+.vault-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.delete-perm-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.delete-perm-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
 }
 
 .vault-empty {
@@ -2193,7 +2237,7 @@ body {
   background: var(--bg-card);
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 12px 14px;
   position: relative;
   overflow: hidden;
 }
@@ -2238,7 +2282,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2294,13 +2338,13 @@ body {
 
 .fix-all-btn {
   width: 100%;
-  margin-top: 10px;
-  padding: 11px 20px;
+  margin-top: 8px;
+  padding: 10px 20px;
   background: var(--safe);
   color: white;
   border: none;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
   transition: opacity 0.15s, transform 0.1s;
@@ -2439,4 +2483,107 @@ body {
   background: none;
   border: none;
   padding: 0;
+}
+
+
+/* ===== QUICK CLEAN BUTTON ===== */
+.quick-clean-btn {
+  width: 100%;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, var(--safe), #059669);
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform 0.1s, opacity 0.15s;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.quick-clean-btn:hover {
+  transform: scale(1.01);
+  opacity: 0.95;
+}
+
+.quick-clean-sub {
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+/* ===== SPACE BREAKDOWN ===== */
+.space-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.space-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.space-row-name {
+  flex: 1;
+  color: var(--text-secondary);
+}
+
+.space-row-size {
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 60px;
+  text-align: right;
+}
+
+.space-cleanable {
+  padding: 8px 12px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 6px;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.space-cleanable:hover {
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.space-cleanable-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--safe);
+}
+
+.space-cleanable-size {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--safe);
+}
+
+/* ===== FREED INDICATOR ===== */
+.freed-indicator {
+  color: var(--safe);
+  font-weight: 700;
+  font-size: 12px;
+  animation: fadeInOut 3s ease forwards;
+}
+
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translateY(4px); }
+  15% { opacity: 1; transform: translateY(0); }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
 }

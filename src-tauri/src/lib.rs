@@ -61,6 +61,18 @@ fn vault_purge() -> Result<u64, String> {
     vault::purge_expired()
 }
 
+/// Permanently delete ALL vault items — reclaim space immediately
+#[tauri::command]
+fn vault_purge_all() -> Result<u64, String> {
+    vault::purge_all()
+}
+
+/// Permanently delete a single vault item
+#[tauri::command]
+fn vault_delete_permanently(id: i64) -> Result<u64, String> {
+    vault::delete_permanently(id)
+}
+
 /// Get a single item's details for the visual explorer
 #[tauri::command]
 fn get_item_children(path: String) -> Result<Vec<ScannedItem>, String> {
@@ -206,6 +218,8 @@ pub fn run() {
             vault_restore,
             vault_list,
             vault_purge,
+            vault_purge_all,
+            vault_delete_permanently,
             get_item_children,
             find_archive_candidates,
             list_volumes,
