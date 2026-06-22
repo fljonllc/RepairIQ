@@ -14,6 +14,11 @@ use duplicates::DuplicateGroup;
 use forecast::StorageForecast;
 use scanner::{ScanResult, ScannedItem};
 use tauri::Emitter;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    Manager,
+};
 use timemachine::TimeMachineInfo;
 use vault::VaultItem;
 
@@ -210,6 +215,39 @@ fn analyze_app_footprints() -> Vec<AppFootprint> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Create tray menu
+            let show_item = MenuItem::with_id(app, "show", "Show RepairIQ", true, None::<&str>)?;
+            let scan_item = MenuItem::with_id(app, "scan", "Quick Scan", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &scan_item, &quit_item])?;
+
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "scan" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.emit("trigger-scan", ());
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             scan_storage,
             scan_storage_with_progress,

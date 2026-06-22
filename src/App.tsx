@@ -10,12 +10,14 @@ import {
   Copy,
   Globe,
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { Dashboard } from "./components/Dashboard";
 import { Explorer } from "./components/Explorer";
 import { Vault } from "./components/Vault";
 import { SmartArchive } from "./components/SmartArchive";
 import { Duplicates } from "./components/Duplicates";
 import { Browsers } from "./components/Browsers";
+import { Onboarding } from "./components/Onboarding";
 import { Settings, DEFAULT_SETTINGS } from "./components/Settings";
 import type { AppSettings } from "./components/Settings";
 import { Treemap } from "./components/Treemap";
@@ -35,6 +37,9 @@ function App() {
     retentionDays: number;
   } | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [hasOnboarded, setHasOnboarded] = useState(() => {
+    return localStorage.getItem("repairiq-onboarded") === "true";
+  });
 
   const { scanResult, scanning, error, scan, removeItemFromResults } = useScanner();
   const {
@@ -70,6 +75,20 @@ function App() {
       }
     }
   }, [initVault]);
+
+  // Listen for tray "scan" event
+  useEffect(() => {
+    const unlisten = listen("trigger-scan", () => {
+      scan();
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [scan]);
+
+  const completeOnboarding = useCallback(() => {
+    localStorage.setItem("repairiq-onboarded", "true");
+    setHasOnboarded(true);
+    scan();
+  }, [scan]);
 
   // Auto-scan on launch if enabled
   useEffect(() => {
@@ -330,7 +349,12 @@ function App() {
       {/* Main Content */}
       <main className="main-content">
         {/* Initial scan prompt */}
-        {!scanResult && !scanning && view === "dashboard" && (
+        {!scanResult && !scanning && view === "dashboard" && !hasOnboarded && (
+          <Onboarding onComplete={completeOnboarding} />
+        )}
+
+        {/* Post-onboarding scan prompt */}
+        {!scanResult && !scanning && view === "dashboard" && hasOnboarded && (
           <div className="scan-prompt">
             <div className="scan-prompt-inner">
               <Search size={48} strokeWidth={1.5} />

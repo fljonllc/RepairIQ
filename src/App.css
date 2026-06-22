@@ -2796,3 +2796,127 @@ body {
   padding: 3px 6px;
   border-radius: 4px;
 }
+
+/* ===== ONBOARDING ===== */
+.onboarding {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+}
+
+.onboarding-content {
+  max-width: 480px;
+  text-align: center;
+}
+
+.onboarding-logo {
+  margin-bottom: 28px;
+}
+
+.onboarding-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.onboarding-logo h1 {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -1px;
+}
+
+.onboarding-tagline {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.onboarding-features {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+  margin-bottom: 24px;
+}
+
+.onboarding-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.onboarding-feature svg {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.onboarding-feature h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.onboarding-feature p {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.onboarding-promises {
+  text-align: left;
+  padding: 12px 16px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+  margin-bottom: 24px;
+}
+
+.onboarding-promises h3 {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--accent);
+}
+
+.onboarding-promises ul {
+  list-style: none;
+  padding: 0;
+}
+
+.onboarding-promises li {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 3px 0;
+}
+
+.onboarding-promises li::before {
+  content: "✗ ";
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.onboarding-start-btn {
+  width: 100%;
+  padding: 14px 24px;
+  background: linear-gradient(135deg, var(--accent), #4f46e5);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.1s, opacity 0.15s;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+}
+
+.onboarding-start-btn:hover {
+  transform: scale(1.02);
+  opacity: 0.95;
+}
