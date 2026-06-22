@@ -44,8 +44,13 @@
             font-weight: 700;
             transition: transform 0.1s, opacity 0.15s;
             box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
+            margin: 0 8px;
         }
         .hero-cta:hover { transform: scale(1.03); opacity: 0.95; }
+        .hero-cta-win {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+        }
         .hero-meta {
             margin-top: 16px;
             font-size: 13px;
@@ -137,7 +142,10 @@
             <a href="https://github.com/fljonllc/RepairIQ/releases/latest" class="hero-cta">
                 ⬇ Download for macOS
             </a>
-            <p class="hero-meta">4 MB · macOS 11+ · No account required · 100% offline</p>
+            <a href="https://github.com/fljonllc/RepairIQ/releases/latest" class="hero-cta hero-cta-win">
+                ⬇ Download for Windows
+            </a>
+            <p class="hero-meta">4 MB · macOS 11+ / Windows 10+ · No account required · 100% offline</p>
         </section>
 
         <section class="diff">
