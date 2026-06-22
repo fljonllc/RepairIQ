@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RepairIQ — Your Mac's Storage Advisor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+            background: #0f0f14;
+            color: #e4e4ef;
+            line-height: 1.6;
+        }
+        .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+        
+        /* Hero */
+        .hero {
+            text-align: center;
+            padding: 80px 0 60px;
+        }
+        .hero-icon { font-size: 64px; margin-bottom: 16px; }
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 800;
+            letter-spacing: -2px;
+            margin-bottom: 12px;
+        }
+        .hero-tagline {
+            font-size: 20px;
+            color: #9494a8;
+            margin-bottom: 32px;
+        }
+        .hero-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 16px 32px;
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            text-decoration: none;
+            border-radius: 12px;
+            font-size: 17px;
+            font-weight: 700;
+            transition: transform 0.1s, opacity 0.15s;
+            box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
+        }
+        .hero-cta:hover { transform: scale(1.03); opacity: 0.95; }
+        .hero-meta {
+            margin-top: 16px;
+            font-size: 13px;
+            color: #6b6b7f;
+        }
+
+        /* Differentiator */
+        .diff {
+            padding: 60px 0;
+            text-align: center;
+        }
+        .diff h2 { font-size: 28px; font-weight: 700; margin-bottom: 32px; }
+        .diff-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            text-align: center;
+        }
+        .diff-card {
+            padding: 24px;
+            background: #1e1e2e;
+            border: 1px solid #2a2a3c;
+            border-radius: 12px;
+        }
+        .diff-card h3 { font-size: 16px; margin-bottom: 6px; color: #9494a8; }
+        .diff-card p { font-size: 14px; color: #6366f1; font-weight: 600; }
+
+        /* Features */
+        .features {
+            padding: 60px 0;
+        }
+        .features h2 { font-size: 28px; font-weight: 700; text-align: center; margin-bottom: 40px; }
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+        .feature {
+            padding: 20px;
+            background: #1e1e2e;
+            border: 1px solid #2a2a3c;
+            border-radius: 10px;
+        }
+        .feature h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+        .feature p { font-size: 12px; color: #9494a8; }
+
+        /* Trust */
+        .trust {
+            padding: 60px 0;
+            text-align: center;
+        }
+        .trust h2 { font-size: 28px; font-weight: 700; margin-bottom: 24px; }
+        .trust-list {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 12px;
+        }
+        .trust-item {
+            padding: 8px 16px;
+            background: rgba(239, 68, 68, 0.08);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 20px;
+            font-size: 13px;
+            color: #ef4444;
+        }
+
+        /* Footer */
+        .footer {
+            padding: 40px 0;
+            text-align: center;
+            border-top: 1px solid #2a2a3c;
+            font-size: 13px;
+            color: #6b6b7f;
+        }
+
+        @media (max-width: 700px) {
+            .diff-grid, .feature-list { grid-template-columns: 1fr; }
+            .hero h1 { font-size: 32px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <section class="hero">
+            <div class="hero-icon">🛡️</div>
+            <h1>RepairIQ</h1>
+            <p class="hero-tagline">Your Mac's Storage Advisor.<br>Diagnose before you act.</p>
+            <a href="https://github.com/fljonllc/RepairIQ/releases/latest" class="hero-cta">
+                ⬇ Download for macOS
+            </a>
+            <p class="hero-meta">4 MB · macOS 11+ · No account required · 100% offline</p>
+        </section>
+
+        <section class="diff">
+            <h2>What makes RepairIQ different?</h2>
+            <div class="diff-grid">
+                <div class="diff-card">
+                    <h3>DaisyDisk</h3>
+                    <p>"Here's the space."</p>
+                </div>
+                <div class="diff-card">
+                    <h3>CleanMyMac</h3>
+                    <p>"Here's the junk."</p>
+                </div>
+                <div class="diff-card" style="border-color: #10b981;">
+                    <h3 style="color: #10b981;">RepairIQ</h3>
+                    <p style="color: #10b981;">"Here's my recommendation,<br>here's my evidence,<br>and here's what happens if I'm wrong."</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="features">
+            <h2>Features</h2>
+            <div class="feature-list">
+                <div class="feature">
+                    <h3>⚡ 8-Second Parallel Scans</h3>
+                    <p>Rayon-powered parallel scanning. Caches system state once, walks each directory in one pass.</p>
+                </div>
+                <div class="feature">
+                    <h3>🧠 Evidence-Based Confidence</h3>
+                    <p>Every recommendation shows WHY it's safe — with real-time system checks and a confidence percentage.</p>
+                </div>
+                <div class="feature">
+                    <h3>🟢 One-Tap Quick Clean</h3>
+                    <p>Items scored 95%+ confidence cleaned in one click. Zero risk, verified safe.</p>
+                </div>
+                <div class="feature">
+                    <h3>🔒 Recovery Vault</h3>
+                    <p>Nothing is permanently deleted. Everything goes to vault first. Restore anytime.</p>
+                </div>
+                <div class="feature">
+                    <h3>📊 Storage Health Score</h3>
+                    <p>A+ to F grade with factor breakdown. Gamified — cleaning improves your score.</p>
+                </div>
+                <div class="feature">
+                    <h3>🔍 Duplicate Detection</h3>
+                    <p>Finds identical files wasting space across your folders using partial content hashing.</p>
+                </div>
+                <div class="feature">
+                    <h3>🌐 Browser Cache Detection</h3>
+                    <p>Chrome, Safari, Firefox, Brave, Arc, Edge — all detected with one-click clean commands.</p>
+                </div>
+                <div class="feature">
+                    <h3>📦 Smart Archive</h3>
+                    <p>Detects old projects, verifies copy to external drive before suggesting removal.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="trust">
+            <h2>RepairIQ will never:</h2>
+            <div class="trust-list">
+                <span class="trust-item">✗ Auto-delete files</span>
+                <span class="trust-item">✗ Use sudo</span>
+                <span class="trust-item">✗ Modify system files</span>
+                <span class="trust-item">✗ Send data anywhere</span>
+                <span class="trust-item">✗ Clean without approval</span>
+                <span class="trust-item">✗ Touch active projects</span>
+            </div>
+        </section>
+
+        <footer class="footer">
+            <p>RepairIQ — Built with Tauri, React, TypeScript, and Rust.</p>
+            <p>Your data never leaves your machine.</p>
+        </footer>
+    </div>
+</body>
+</html>
