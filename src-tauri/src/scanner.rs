@@ -99,49 +99,100 @@ struct SystemState {
 
 impl SystemState {
     fn detect() -> Self {
-        let docker_running = Command::new("pgrep")
-            .args(["-x", "Docker"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        let docker_containers_active = if docker_running {
-            Command::new("docker")
-                .args(["ps", "-q"])
+        #[cfg(target_os = "macos")]
+        {
+            let docker_running = Command::new("pgrep")
+                .args(["-x", "Docker"])
                 .output()
-                .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-                .unwrap_or(false)
-        } else {
-            false
-        };
+                .map(|o| o.status.success())
+                .unwrap_or(false);
 
-        let docker_has_volumes = if docker_running {
-            Command::new("docker")
-                .args(["volume", "ls", "-q"])
+            let docker_containers_active = if docker_running {
+                Command::new("docker")
+                    .args(["ps", "-q"])
+                    .output()
+                    .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            let docker_has_volumes = if docker_running {
+                Command::new("docker")
+                    .args(["volume", "ls", "-q"])
+                    .output()
+                    .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            // Get ALL running processes in one call
+            let running_apps = Command::new("ps")
+                .args(["-axo", "comm"])
                 .output()
-                .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-                .unwrap_or(false)
-        } else {
-            false
-        };
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .map(|l| l.trim().to_lowercase())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
 
-        // Get ALL running processes in one call
-        let running_apps = Command::new("ps")
-            .args(["-axo", "comm"])
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(|l| l.trim().to_lowercase())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+            Self {
+                docker_running,
+                docker_containers_active,
+                docker_has_volumes,
+                running_apps,
+            }
+        }
 
-        Self {
-            docker_running,
-            docker_containers_active,
-            docker_has_volumes,
-            running_apps,
+        #[cfg(target_os = "windows")]
+        {
+            let docker_running = Command::new("docker")
+                .args(["info"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            let docker_containers_active = if docker_running {
+                Command::new("docker")
+                    .args(["ps", "-q"])
+                    .output()
+                    .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            let docker_has_volumes = false;
+
+            let running_apps = Command::new("tasklist")
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .map(|l| l.trim().to_lowercase())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+
+            Self {
+                docker_running,
+                docker_containers_active,
+                docker_has_volumes,
+                running_apps,
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Self {
+                docker_running: false,
+                docker_containers_active: false,
+                docker_has_volumes: false,
+                running_apps: vec![],
+            }
         }
     }
 
@@ -270,30 +321,113 @@ struct ItemIntel {
     why_recommended: String,
     what_if_wrong: String,
 }
-
-
 // ============================================================
 // UTILITY FUNCTIONS
 // ============================================================
 
 fn get_disk_info() -> (u64, u64, u64) {
-    let output = Command::new("df")
-        .args(["-k", "/"])
-        .output()
-        .unwrap_or_else(|_| panic!("Failed to run df"));
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("df")
+            .args(["-k", "/"])
+            .output()
+            .unwrap_or_else(|_| panic!("Failed to run df"));
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout.lines().collect();
-    if lines.len() >= 2 {
-        let parts: Vec<&str> = lines[1].split_whitespace().collect();
-        if parts.len() >= 4 {
-            let total = parts[1].parse::<u64>().unwrap_or(0) * 1024;
-            let used = parts[2].parse::<u64>().unwrap_or(0) * 1024;
-            let free = parts[3].parse::<u64>().unwrap_or(0) * 1024;
-            return (total, used, free);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = stdout.lines().collect();
+        if lines.len() >= 2 {
+            let parts: Vec<&str> = lines[1].split_whitespace().collect();
+            if parts.len() >= 4 {
+                let total = parts[1].parse::<u64>().unwrap_or(0) * 1024;
+                let used = parts[2].parse::<u64>().unwrap_or(0) * 1024;
+                let free = parts[3].parse::<u64>().unwrap_or(0) * 1024;
+                return (total, used, free);
+            }
         }
+        (0, 0, 0)
     }
-    (0, 0, 0)
+
+    #[cfg(target_os = "windows")]
+    {
+        // Use wmic on Windows
+        let output = Command::new("wmic")
+            .args(["logicaldisk", "where", "DeviceID='C:'", "get", "Size,FreeSpace", "/format:csv"])
+            .output()
+            .unwrap_or_else(|_| panic!("Failed to get disk info"));
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 3 {
+                let free = parts[1].trim().parse::<u64>().unwrap_or(0);
+                let total = parts[2].trim().parse::<u64>().unwrap_or(0);
+                if total > 0 {
+                    return (total, total - free, free);
+                }
+            }
+        }
+        (0, 0, 0)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        (0, 0, 0)
+    }
+}
+
+/// Get platform-specific scan targets
+fn get_scan_targets(home: &Path) -> Vec<(&'static str, &'static str, PathBuf)> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            ("System Data", "Caches", home.join("Library/Caches")),
+            ("System Data", "Application Support", home.join("Library/Application Support")),
+            ("System Data", "Logs", home.join("Library/Logs")),
+            ("System Data", "Saved State", home.join("Library/Saved Application State")),
+            ("Developer", "Xcode DerivedData", home.join("Library/Developer/Xcode/DerivedData")),
+            ("Developer", "Xcode Archives", home.join("Library/Developer/Xcode/Archives")),
+            ("Developer", "CoreSimulator", home.join("Library/Developer/CoreSimulator")),
+            ("Developer", "Cargo Registry", home.join(".cargo/registry")),
+            ("Developer", "npm Cache", home.join(".npm")),
+            ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
+            ("Downloads", "Downloads", home.join("Downloads")),
+            ("Virtual Machines", "UTM VMs", home.join("Library/Containers/com.utmapp.UTM/Data/Documents")),
+            ("Messages", "Messages Data", home.join("Library/Messages")),
+            ("Music", "Music Library", home.join("Music")),
+            ("Documents", "Documents", home.join("Documents")),
+            ("Desktop", "Desktop", home.join("Desktop")),
+            ("Applications", "Applications", PathBuf::from("/Applications")),
+            ("Trash", "Trash", home.join(".Trash")),
+        ]
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = home.join("AppData");
+        vec![
+            ("System Data", "Temp Files", PathBuf::from("C:\\Windows\\Temp")),
+            ("System Data", "Local Cache", appdata.join("Local\\Temp")),
+            ("System Data", "App Cache", appdata.join("Local\\Microsoft")),
+            ("Developer", "Cargo Registry", home.join(".cargo\\registry")),
+            ("Developer", "npm Cache", appdata.join("Local\\npm-cache")),
+            ("Developer", "nuget Cache", appdata.join("Local\\NuGet")),
+            ("Docker", "Docker Data", appdata.join("Local\\Docker")),
+            ("Downloads", "Downloads", home.join("Downloads")),
+            ("Documents", "Documents", home.join("Documents")),
+            ("Desktop", "Desktop", home.join("Desktop")),
+            ("Applications", "Programs", PathBuf::from("C:\\Program Files")),
+            ("Trash", "Recycle Bin", PathBuf::from("C:\\$Recycle.Bin")),
+        ]
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        vec![
+            ("Downloads", "Downloads", home.join("Downloads")),
+            ("Documents", "Documents", home.join("Documents")),
+            ("Desktop", "Desktop", home.join("Desktop")),
+        ]
+    }
 }
 
 fn days_since_access(path: &Path) -> Option<u64> {
@@ -1120,8 +1254,6 @@ fn analyze_path(path: &Path, category: &str, state: &SystemState, scan_result: O
         ..Default::default()
     }
 }
-
-
 // ============================================================
 // FILL ADVISOR FIELDS — same logic, uses cached state
 // ============================================================
@@ -1663,8 +1795,6 @@ fn fill_advisor_fields(mut intel: ItemIntel, path: &Path, category: &str, state:
 
     intel
 }
-
-
 // ============================================================
 // PARALLEL SCAN — uses rayon for directory-level parallelism
 // ============================================================
@@ -2042,26 +2172,8 @@ pub fn perform_scan() -> ScanResult {
     // System state checked ONCE
     let state = SystemState::detect();
 
-    let scan_targets: Vec<(&str, &str, PathBuf)> = vec![
-        ("System Data", "Caches", home.join("Library/Caches")),
-        ("System Data", "Application Support", home.join("Library/Application Support")),
-        ("System Data", "Logs", home.join("Library/Logs")),
-        ("System Data", "Saved State", home.join("Library/Saved Application State")),
-        ("Developer", "Xcode DerivedData", home.join("Library/Developer/Xcode/DerivedData")),
-        ("Developer", "Xcode Archives", home.join("Library/Developer/Xcode/Archives")),
-        ("Developer", "CoreSimulator", home.join("Library/Developer/CoreSimulator")),
-        ("Developer", "Cargo Registry", home.join(".cargo/registry")),
-        ("Developer", "npm Cache", home.join(".npm")),
-        ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
-        ("Downloads", "Downloads", home.join("Downloads")),
-        ("Virtual Machines", "UTM VMs", home.join("Library/Containers/com.utmapp.UTM/Data/Documents")),
-        ("Messages", "Messages Data", home.join("Library/Messages")),
-        ("Music", "Music Library", home.join("Music")),
-        ("Documents", "Documents", home.join("Documents")),
-        ("Desktop", "Desktop", home.join("Desktop")),
-        ("Applications", "Applications", PathBuf::from("/Applications")),
-        ("Trash", "Trash", home.join(".Trash")),
-    ];
+    let scan_targets = get_scan_targets(&home);
+
 
     // Scan all targets in PARALLEL
     let all_items: Vec<ScannedItem> = scan_targets
@@ -2145,26 +2257,8 @@ pub fn perform_scan_with_progress(progress: impl Fn(String)) -> ScanResult {
     progress("Checking system state...".to_string());
     let state = SystemState::detect();
 
-    let scan_targets: Vec<(&str, &str, PathBuf)> = vec![
-        ("System Data", "Caches", home.join("Library/Caches")),
-        ("System Data", "Application Support", home.join("Library/Application Support")),
-        ("System Data", "Logs", home.join("Library/Logs")),
-        ("System Data", "Saved State", home.join("Library/Saved Application State")),
-        ("Developer", "Xcode DerivedData", home.join("Library/Developer/Xcode/DerivedData")),
-        ("Developer", "Xcode Archives", home.join("Library/Developer/Xcode/Archives")),
-        ("Developer", "CoreSimulator", home.join("Library/Developer/CoreSimulator")),
-        ("Developer", "Cargo Registry", home.join(".cargo/registry")),
-        ("Developer", "npm Cache", home.join(".npm")),
-        ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
-        ("Downloads", "Downloads", home.join("Downloads")),
-        ("Virtual Machines", "UTM VMs", home.join("Library/Containers/com.utmapp.UTM/Data/Documents")),
-        ("Messages", "Messages Data", home.join("Library/Messages")),
-        ("Music", "Music Library", home.join("Music")),
-        ("Documents", "Documents", home.join("Documents")),
-        ("Desktop", "Desktop", home.join("Desktop")),
-        ("Applications", "Applications", PathBuf::from("/Applications")),
-        ("Trash", "Trash", home.join(".Trash")),
-    ];
+    let scan_targets = get_scan_targets(&home);
+
 
     let total_targets = scan_targets.len();
     let mut all_items: Vec<ScannedItem> = Vec::new();
