@@ -12,10 +12,12 @@
     "windows": [
       {
         "title": "RepairIQ — Diagnose Before You Act",
-        "width": 1100,
-        "height": 820,
-        "minWidth": 900,
-        "minHeight": 650
+        "width": 1200,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 600,
+        "maximizable": true,
+        "maximized": true
       }
     ],
     "trayIcon": {

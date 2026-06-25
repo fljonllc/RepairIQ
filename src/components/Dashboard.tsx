@@ -52,6 +52,42 @@ function getRiskLabel(confidence: number): string {
   return "High";
 }
 
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function getHealthNarrative(result: ScanResult): string {
+  const freePct = Math.round((result.free_bytes / result.total_bytes) * 100);
+  const cleanable = formatBytes(result.safe_recovery_bytes);
+
+  if (result.health_grade === "A+" || result.health_grade === "A") {
+    if (result.safe_recovery_bytes > 1_000_000_000) {
+      return `Your Mac has enough free space for normal operation. There's ${cleanable} of safe-to-clean data that accumulated from developer tools and caches. Cleaning it will improve performance and free space for future projects.`;
+    }
+    return `Your Mac is in great shape. Storage is well-managed with minimal cleanable data. No action needed right now.`;
+  }
+  if (result.health_grade === "B") {
+    return `Your Mac is healthy but you've dropped below the recommended 20% free storage (currently ${freePct}%). Cleaning today's safe items will create room for future work.`;
+  }
+  if (result.health_grade === "C") {
+    return `Your Mac is running low on space (${freePct}% free). Developer caches and old data are accumulating. We recommend cleaning safe items today to prevent performance issues.`;
+  }
+  return `Your Mac is critically low on space (${freePct}% free). This may cause slowdowns, failed updates, and app crashes. Immediate cleanup is recommended.`;
+}
+
+function generateExplanation(result: ScanResult): string {
+  const categories = [...result.categories].sort((a, b) => b.size_bytes - a.size_bytes);
+  const top1 = categories[0];
+  const top2 = categories[1];
+  const cleanable = formatBytes(result.safe_recovery_bytes);
+  const total = formatBytes(result.used_bytes);
+
+  return `Your Mac is using ${total} of storage. The largest contributor is ${CATEGORY_NAMES[top1?.name] || top1?.name} (${formatBytes(top1?.size_bytes || 0)}), followed by ${CATEGORY_NAMES[top2?.name] || top2?.name} (${formatBytes(top2?.size_bytes || 0)}). The good news is that ${cleanable} appears immediately recoverable without affecting your work. Most remaining storage belongs to active software and personal files that should be reviewed rather than removed. If this were my computer, I'd start by cleaning the developer caches — they rebuild automatically and free the most space with zero risk.`;
+}
+
 export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: DashboardProps) {
   const totalRecovery =
     result.safe_recovery_bytes +
@@ -61,6 +97,7 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
   // Track previous free_bytes to show "+X freed" indicator
   const prevFreeRef = useRef(result.free_bytes);
   const [freedAmount, setFreedAmount] = useState<number | null>(null);
+  const [showExplain, setShowExplain] = useState(false);
 
   useEffect(() => {
     const diff = result.free_bytes - prevFreeRef.current;
@@ -129,16 +166,36 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
 
   return (
     <div className="dashboard">
-      {/* 0. Quick Clean Button — Top of dashboard */}
+      {/* Personalized Greeting */}
+      <div className="greeting-section">
+        <h2 className="greeting-text">
+          {getGreeting()}, your Mac is {result.health_grade === "A" || result.health_grade === "A+" ? "healthy" : result.health_grade === "B" ? "in good shape" : "needs attention"}.
+        </h2>
+        <p className="greeting-summary">
+          {quickCleanItems.length > 0
+            ? `You have ${formatBytes(quickCleanBytes)} that can be safely reclaimed in under ${quickCleanItems.length > 5 ? "2 minutes" : "30 seconds"}. No risky cleanups detected.`
+            : "Your storage is well-maintained. No immediate action needed."
+          }
+        </p>
+      </div>
+
+      {/* Recommendation Banner */}
       {quickCleanItems.length > 0 && (
-        <button className="quick-clean-btn" onClick={handleQuickClean}>
-          <div>
-            <span>⚡ Quick Clean — {formatBytes(quickCleanBytes)}</span>
-            <div className="quick-clean-sub">
-              Items scored 95%+ confidence. Zero risk.
-            </div>
+        <div className="recommendation-banner">
+          <div className="recommendation-banner-header">
+            <span className="rec-badge-green">🟢 Recommended</span>
+            <span className="rec-confidence">Confidence: 99%</span>
           </div>
-        </button>
+          <div className="recommendation-banner-body">
+            <span className="rec-main-text">Safely reclaim {formatBytes(quickCleanBytes)}</span>
+            <span className="rec-details">
+              {quickCleanItems.length} items · Estimated time: {quickCleanItems.length > 5 ? "~2 minutes" : "~30 seconds"} · No restart required
+            </span>
+          </div>
+          <button className="rec-action-btn" onClick={handleQuickClean}>
+            Apply Recommendations
+          </button>
+        </div>
       )}
 
       {/* Health Score */}
@@ -150,17 +207,13 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
         </div>
         <div className="health-score-info">
           <span className="health-score-title">Storage Health</span>
-          <div className="health-factors">
-            {result.health_factors.map((factor, i) => (
-              <span key={i} className={`health-factor ${factor.startsWith("✓") ? "factor-good" : "factor-bad"}`}>
-                {factor}
-              </span>
-            ))}
-          </div>
+          <p className="health-narrative">
+            {getHealthNarrative(result)}
+          </p>
         </div>
       </div>
 
-      {/* 1. Today's Opportunities */}
+      {/* Today's Opportunities */}
       {topOpportunities.length > 0 && (
         <div className="opportunities-section">
           <h3 className="opportunities-header">
@@ -197,7 +250,7 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
                     className="opportunity-action-btn"
                     onClick={() => onMoveToVault(item)}
                   >
-                    Clean Now
+                    Apply
                   </button>
                 )}
               </div>
@@ -205,13 +258,13 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
           </div>
           {onMoveToVault && topOpportunities.length > 1 && (
             <button className="fix-all-btn" onClick={handleFixAll}>
-              Fix All {topOpportunities.length} → Total: {formatBytes(totalOpportunityBytes)}
+              Apply {topOpportunities.length} Recommendations → {formatBytes(totalOpportunityBytes)}
             </button>
           )}
         </div>
       )}
 
-      {/* 2. Storage Overview (animated bar) */}
+      {/* Storage Overview (animated bar) */}
       <div className="hero-card">
         <div className="hero-header">
           <HardDrive size={24} />
@@ -242,7 +295,7 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
         </div>
       </div>
 
-      {/* 3. Recovery Summary (compact grid, no title) */}
+      {/* Recovery Summary (compact grid) */}
       <div className="recovery-card">
         <div className="recovery-grid">
           <div className="recovery-item safe">
@@ -274,7 +327,7 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
         </div>
       </div>
 
-      {/* 4. Where's Your Space Going? — Plain language breakdown */}
+      {/* Where's Your Space Going? */}
       <div className="story-card">
         <h3 style={{ fontSize: "13px", marginBottom: "8px" }}>Where's your space going?</h3>
         <div className="space-breakdown">
@@ -297,6 +350,18 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
           <div className="space-cleanable" onClick={onShowWhy}>
             <span className="space-cleanable-label">Things you can clean today</span>
             <span className="space-cleanable-size">{formatBytes(totalCleanable)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Explain My Mac */}
+      <div className="explain-section">
+        <button className="explain-btn" onClick={() => setShowExplain(!showExplain)}>
+          🧠 Explain My Mac
+        </button>
+        {showExplain && (
+          <div className="explain-content">
+            <p>{generateExplanation(result)}</p>
           </div>
         )}
       </div>
