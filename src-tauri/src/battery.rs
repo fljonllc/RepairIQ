@@ -13,6 +13,32 @@ pub struct BatteryInfo {
 }
 
 pub fn get_battery_info() -> BatteryInfo {
+    #[cfg(target_os = "macos")]
+    {
+        get_battery_info_macos()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        get_battery_info_windows()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        BatteryInfo {
+            cycle_count: 0,
+            max_capacity_percent: 100,
+            condition: "Unknown".to_string(),
+            is_charging: false,
+            current_charge_percent: 0,
+            health_grade: "Unknown".to_string(),
+            recommendation: "Battery info not available on this platform".to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_battery_info_macos() -> BatteryInfo {
     let output = Command::new("system_profiler")
         .args(["SPPowerDataType", "-json"])
         .output();
@@ -104,6 +130,97 @@ pub fn get_battery_info() -> BatteryInfo {
         _ => format!(
             "Battery significantly degraded at {}% ({} cycles). Replacement recommended.",
             info.max_capacity_percent, info.cycle_count
+        ),
+    };
+
+    info
+}
+
+#[cfg(target_os = "windows")]
+fn get_battery_info_windows() -> BatteryInfo {
+    let mut info = BatteryInfo {
+        cycle_count: 0,
+        max_capacity_percent: 100,
+        condition: "Unknown".to_string(),
+        is_charging: false,
+        current_charge_percent: 0,
+        health_grade: "Unknown".to_string(),
+        recommendation: "Could not read battery info".to_string(),
+    };
+
+    // Use WMIC to get battery info
+    if let Ok(output) = Command::new("WMIC")
+        .args([
+            "Path",
+            "Win32_Battery",
+            "Get",
+            "EstimatedChargeRemaining,DesignCapacity,FullChargeCapacity,Status,BatteryStatus",
+            "/format:csv",
+        ])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split(',').collect();
+            // CSV format: Node,BatteryStatus,DesignCapacity,EstimatedChargeRemaining,FullChargeCapacity,Status
+            if parts.len() >= 6 {
+                let battery_status = parts[1].trim().parse::<u32>().unwrap_or(0);
+                let design_capacity = parts[2].trim().parse::<u32>().unwrap_or(0);
+                let charge_remaining = parts[3].trim().parse::<u32>().unwrap_or(0);
+                let full_charge_capacity = parts[4].trim().parse::<u32>().unwrap_or(0);
+
+                info.current_charge_percent = charge_remaining;
+                // BatteryStatus: 2 = AC, 3-5 = charging states
+                info.is_charging = battery_status >= 2;
+
+                if design_capacity > 0 && full_charge_capacity > 0 {
+                    info.max_capacity_percent =
+                        ((full_charge_capacity as f64 / design_capacity as f64) * 100.0) as u32;
+                    info.max_capacity_percent = info.max_capacity_percent.min(100);
+                }
+            }
+        }
+    }
+
+    // If WMIC returned no battery (desktop), return sensible defaults
+    if info.current_charge_percent == 0 && info.max_capacity_percent == 100 {
+        info.condition = "No Battery Detected".to_string();
+        info.health_grade = "N/A".to_string();
+        info.recommendation =
+            "No battery detected — this may be a desktop computer.".to_string();
+        return info;
+    }
+
+    info.condition = if info.max_capacity_percent >= 80 {
+        "Normal".to_string()
+    } else {
+        "Service Recommended".to_string()
+    };
+
+    // Calculate grade
+    info.health_grade = match info.max_capacity_percent {
+        90..=100 => "Excellent".to_string(),
+        80..=89 => "Good".to_string(),
+        70..=79 => "Fair".to_string(),
+        _ => "Poor".to_string(),
+    };
+
+    info.recommendation = match info.max_capacity_percent {
+        90..=100 => format!(
+            "Battery is healthy at {}% capacity.",
+            info.max_capacity_percent
+        ),
+        80..=89 => format!(
+            "Battery has degraded slightly to {}%. Normal wear.",
+            info.max_capacity_percent
+        ),
+        70..=79 => format!(
+            "Battery at {}% capacity. Consider replacement within a year.",
+            info.max_capacity_percent
+        ),
+        _ => format!(
+            "Battery significantly degraded at {}%. Replacement recommended.",
+            info.max_capacity_percent
         ),
     };
 

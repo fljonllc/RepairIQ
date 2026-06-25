@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Copy,
   Globe,
+  Activity,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Dashboard } from "./components/Dashboard";
@@ -17,6 +18,7 @@ import { Vault } from "./components/Vault";
 import { SmartArchive } from "./components/SmartArchive";
 import { Duplicates } from "./components/Duplicates";
 import { Browsers } from "./components/Browsers";
+import { MacHealth } from "./components/MacHealth";
 import { Onboarding } from "./components/Onboarding";
 import { Settings, DEFAULT_SETTINGS } from "./components/Settings";
 import type { AppSettings } from "./components/Settings";
@@ -318,6 +320,12 @@ function App() {
           >
             <Globe size={18} /> Browsers
           </button>
+          <button
+            className={`nav-btn ${view === "health" ? "active" : ""}`}
+            onClick={() => setView("health")}
+          >
+            <Activity size={18} /> Mac Health
+          </button>
 
           <div className="nav-divider" />
 
@@ -479,6 +487,9 @@ function App() {
 
         {/* Browsers View */}
         {view === "browsers" && <Browsers />}
+
+        {/* Mac Health View */}
+        {view === "health" && <MacHealth />}
 
         {/* Settings View */}
         {view === "settings" && (

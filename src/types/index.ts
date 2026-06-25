@@ -79,7 +79,7 @@ export interface Toast {
   message: string;
 }
 
-export type View = "dashboard" | "explorer" | "vault" | "archive" | "duplicates" | "browsers" | "settings";
+export type View = "dashboard" | "explorer" | "vault" | "archive" | "duplicates" | "browsers" | "health" | "settings";
 
 export interface DuplicateGroup {
   hash: string;

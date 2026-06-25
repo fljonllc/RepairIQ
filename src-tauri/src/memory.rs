@@ -18,6 +18,30 @@ pub struct ProcessMemory {
 }
 
 pub fn get_memory_info() -> MemoryInfo {
+    #[cfg(target_os = "macos")]
+    {
+        get_memory_info_macos()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        get_memory_info_windows()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        MemoryInfo {
+            total_bytes: 0,
+            used_bytes: 0,
+            free_bytes: 0,
+            pressure: "Unknown".to_string(),
+            top_consumers: vec![],
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_memory_info_macos() -> MemoryInfo {
     let mut info = MemoryInfo {
         total_bytes: 0,
         used_bytes: 0,
@@ -82,5 +106,116 @@ pub fn get_memory_info() -> MemoryInfo {
     }
 
     info.free_bytes = info.total_bytes.saturating_sub(info.used_bytes);
+    info
+}
+
+#[cfg(target_os = "windows")]
+fn get_memory_info_windows() -> MemoryInfo {
+    let mut info = MemoryInfo {
+        total_bytes: 0,
+        used_bytes: 0,
+        free_bytes: 0,
+        pressure: "Unknown".to_string(),
+        top_consumers: vec![],
+    };
+
+    // Get total RAM via wmic
+    if let Ok(output) = Command::new("wmic")
+        .args(["ComputerSystem", "get", "TotalPhysicalMemory", "/format:csv"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                if let Ok(total) = parts.last().unwrap_or(&"").trim().parse::<u64>() {
+                    if total > 0 {
+                        info.total_bytes = total;
+                    }
+                }
+            }
+        }
+    }
+
+    // Get free memory via wmic
+    if let Ok(output) = Command::new("wmic")
+        .args(["OS", "get", "FreePhysicalMemory", "/format:csv"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 2 {
+                if let Ok(free_kb) = parts.last().unwrap_or(&"").trim().parse::<u64>() {
+                    if free_kb > 0 {
+                        info.free_bytes = free_kb * 1024;
+                    }
+                }
+            }
+        }
+    }
+
+    info.used_bytes = info.total_bytes.saturating_sub(info.free_bytes);
+
+    // Determine memory pressure based on usage percentage
+    if info.total_bytes > 0 {
+        let usage_pct = (info.used_bytes as f64 / info.total_bytes as f64) * 100.0;
+        info.pressure = if usage_pct > 90.0 {
+            "Critical".to_string()
+        } else if usage_pct > 75.0 {
+            "Warning".to_string()
+        } else {
+            "Normal".to_string()
+        };
+    }
+
+    // Get top processes via tasklist
+    if let Ok(output) = Command::new("tasklist")
+        .args(["/FO", "CSV", "/NH"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut processes: Vec<ProcessMemory> = Vec::new();
+
+        for line in stdout.lines() {
+            // CSV format: "Image Name","PID","Session Name","Session#","Mem Usage"
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 5 {
+                let name = parts[0].trim().trim_matches('"').to_string();
+                let pid = parts[1]
+                    .trim()
+                    .trim_matches('"')
+                    .parse::<u32>()
+                    .unwrap_or(0);
+                // Memory is like "123,456 K" — but since we split on comma,
+                // we need to handle the memory field which may span parts[4..]
+                let mem_str: String = parts[4..]
+                    .iter()
+                    .map(|s| s.trim().trim_matches('"'))
+                    .collect::<Vec<&str>>()
+                    .join("");
+                let mem_kb: u64 = mem_str
+                    .chars()
+                    .filter(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse()
+                    .unwrap_or(0);
+
+                if mem_kb > 50_000 {
+                    // Only show processes using > 50MB
+                    processes.push(ProcessMemory {
+                        name,
+                        memory_bytes: mem_kb * 1024,
+                        pid,
+                    });
+                }
+            }
+        }
+
+        processes.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes));
+        processes.truncate(10);
+        info.top_consumers = processes;
+    }
+
     info
 }
