@@ -1,18 +1,32 @@
 mod appfootprint;
 mod archive;
+mod battery;
 mod browser;
 mod duplicates;
 mod forecast;
+mod largefiles;
+mod memory;
+mod network;
+mod oldapps;
+mod privacy;
 mod scanner;
+mod startup;
 mod timemachine;
 mod vault;
 
 use appfootprint::AppFootprint;
 use archive::ArchiveRecommendation;
+use battery::BatteryInfo;
 use browser::BrowserCache;
 use duplicates::DuplicateGroup;
 use forecast::StorageForecast;
+use largefiles::LargeFile;
+use memory::MemoryInfo;
+use network::NetworkConnection;
+use oldapps::OldApp;
+use privacy::PrivacyItem;
 use scanner::{ScanResult, ScannedItem};
+use startup::StartupItem;
 use tauri::Emitter;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -211,6 +225,41 @@ fn analyze_app_footprints() -> Vec<AppFootprint> {
     appfootprint::analyze_footprints()
 }
 
+#[tauri::command]
+fn get_startup_items() -> Vec<StartupItem> {
+    startup::get_startup_items()
+}
+
+#[tauri::command]
+fn find_large_files(min_size_mb: u64) -> Vec<LargeFile> {
+    largefiles::find_large_files(min_size_mb)
+}
+
+#[tauri::command]
+fn find_old_apps(days_threshold: u64) -> Vec<OldApp> {
+    oldapps::find_old_apps(days_threshold)
+}
+
+#[tauri::command]
+fn scan_privacy() -> Vec<PrivacyItem> {
+    privacy::scan_privacy()
+}
+
+#[tauri::command]
+fn get_network_connections() -> Vec<NetworkConnection> {
+    network::get_active_connections()
+}
+
+#[tauri::command]
+fn get_battery_info() -> BatteryInfo {
+    battery::get_battery_info()
+}
+
+#[tauri::command]
+fn get_memory_info() -> MemoryInfo {
+    memory::get_memory_info()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -269,6 +318,13 @@ pub fn run() {
             record_storage_snapshot,
             record_clean_action,
             analyze_app_footprints,
+            get_startup_items,
+            find_large_files,
+            find_old_apps,
+            scan_privacy,
+            get_network_connections,
+            get_battery_info,
+            get_memory_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
