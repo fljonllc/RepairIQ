@@ -7,6 +7,7 @@ import {
   Clock,
   Zap,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ScanResult, ScannedItem } from "../types";
 import { formatBytes } from "../utils";
 
@@ -98,6 +99,21 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
   const prevFreeRef = useRef(result.free_bytes);
   const [freedAmount, setFreedAmount] = useState<number | null>(null);
   const [showExplain, setShowExplain] = useState(false);
+  const [forecast, setForecast] = useState<{ days_until_full: number | null; daily_growth_bytes: number; weekly_growth_bytes: number; total_cleaned_bytes: number; total_cleaned_count: number } | null>(null);
+
+  // Load forecast on mount + record snapshot
+  useEffect(() => {
+    const loadForecast = async () => {
+      try {
+        // Record current state
+        await invoke("record_storage_snapshot", { usedBytes: result.used_bytes, freeBytes: result.free_bytes, totalBytes: result.total_bytes });
+        // Get forecast
+        const fc = await invoke<{ days_until_full: number | null; daily_growth_bytes: number; weekly_growth_bytes: number; total_cleaned_bytes: number; total_cleaned_count: number }>("get_storage_forecast");
+        setForecast(fc);
+      } catch (e) { console.error(e); }
+    };
+    loadForecast();
+  }, [result.used_bytes]);
 
   useEffect(() => {
     const diff = result.free_bytes - prevFreeRef.current;
@@ -294,6 +310,27 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
           <span>Total: {formatBytes(result.total_bytes)}</span>
         </div>
       </div>
+
+      {/* Storage Timeline */}
+      {forecast && (forecast.daily_growth_bytes !== 0 || forecast.total_cleaned_bytes > 0) && (
+        <div className="timeline-card">
+          <h3 className="timeline-title">📈 Your Mac Over Time</h3>
+          <div className="timeline-stats">
+            {forecast.daily_growth_bytes > 0 && (
+              <span className="timeline-stat timeline-growing">↑ Growing {formatBytes(Math.abs(forecast.weekly_growth_bytes))}/week</span>
+            )}
+            {forecast.daily_growth_bytes < 0 && (
+              <span className="timeline-stat timeline-shrinking">↓ Shrinking {formatBytes(Math.abs(forecast.weekly_growth_bytes))}/week</span>
+            )}
+            {forecast.days_until_full && forecast.days_until_full < 365 && (
+              <span className="timeline-stat timeline-warning">⚠️ Full in ~{forecast.days_until_full} days at this rate</span>
+            )}
+            {forecast.total_cleaned_bytes > 0 && (
+              <span className="timeline-stat timeline-cleaned">✨ You've cleaned {formatBytes(forecast.total_cleaned_bytes)} total ({forecast.total_cleaned_count} times)</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Recovery Summary (compact grid) */}
       <div className="recovery-card">

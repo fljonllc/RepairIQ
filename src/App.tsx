@@ -44,6 +44,7 @@ function App() {
   });
 
   const { scanResult, scanning, error, scan, removeItemFromResults } = useScanner();
+  const [showCelebration, setShowCelebration] = useState<number | null>(null);
   const {
     vaultItems,
     loading: vaultLoading,
@@ -146,6 +147,25 @@ function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // Sound effect on clean
+  const playCleanSound = () => {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(1200, audioContext.currentTime + 0.1);
+      oscillator.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.3);
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.4);
+    } catch (e) { /* silently fail if audio not available */ }
+  };
+
   // Vault action with confirmation
   const requestMoveToVault = useCallback(
     (item: ScannedItem) => {
@@ -166,6 +186,9 @@ function App() {
         "success",
         `Moved "${item.name}" to vault (${formatBytes(item.size_bytes)} recoverable for ${retentionDays} days)`
       );
+      playCleanSound();
+      setShowCelebration(item.size_bytes);
+      setTimeout(() => setShowCelebration(null), 2500);
     } catch (e) {
       addToast("error", `Failed to move "${item.name}": ${String(e)}`);
     }
@@ -205,6 +228,9 @@ function App() {
         "success",
         `Cleaned ${cleaned} items → ${formatBytes(totalFreed)} moved to Recovery Vault`
       );
+      playCleanSound();
+      setShowCelebration(totalFreed);
+      setTimeout(() => setShowCelebration(null), 2500);
     }
   }, [batchItems, moveToVault, settings.defaultRetentionDays, removeItemFromResults, addToast]);
 
@@ -525,6 +551,17 @@ function App() {
 
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      {/* Celebration Overlay */}
+      {showCelebration && (
+        <div className="celebration-overlay">
+          <div className="celebration-content">
+            <span className="celebration-emoji">🎉</span>
+            <span className="celebration-amount">+{formatBytes(showCelebration)} freed</span>
+            <span className="celebration-sub">Space reclaimed successfully</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
