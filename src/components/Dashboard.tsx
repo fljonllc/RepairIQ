@@ -60,23 +60,30 @@ function getGreeting(): string {
   return "Good evening";
 }
 
+function getDeviceName(): string {
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes("mac")) return "Mac";
+  if (platform.includes("win")) return "PC";
+  return "computer";
+}
+
 function getHealthNarrative(result: ScanResult): string {
   const freePct = Math.round((result.free_bytes / result.total_bytes) * 100);
   const cleanable = formatBytes(result.safe_recovery_bytes);
 
   if (result.health_grade === "A+" || result.health_grade === "A") {
     if (result.safe_recovery_bytes > 1_000_000_000) {
-      return `Your Mac has enough free space for normal operation. There's ${cleanable} of safe-to-clean data that accumulated from developer tools and caches. Cleaning it will improve performance and free space for future projects.`;
+      return `Your ${getDeviceName()} has enough free space for normal operation. There's ${cleanable} of safe-to-clean data that accumulated from developer tools and caches. Cleaning it will improve performance and free space for future projects.`;
     }
-    return `Your Mac is in great shape. Storage is well-managed with minimal cleanable data. No action needed right now.`;
+    return `Your ${getDeviceName()} is in great shape. Storage is well-managed with minimal cleanable data. No action needed right now.`;
   }
   if (result.health_grade === "B") {
-    return `Your Mac is healthy but you've dropped below the recommended 20% free storage (currently ${freePct}%). Cleaning today's safe items will create room for future work.`;
+    return `Your ${getDeviceName()} is healthy but you've dropped below the recommended 20% free storage (currently ${freePct}%). Cleaning today's safe items will create room for future work.`;
   }
   if (result.health_grade === "C") {
-    return `Your Mac is running low on space (${freePct}% free). Developer caches and old data are accumulating. We recommend cleaning safe items today to prevent performance issues.`;
+    return `Your ${getDeviceName()} is running low on space (${freePct}% free). Developer caches and old data are accumulating. We recommend cleaning safe items today to prevent performance issues.`;
   }
-  return `Your Mac is critically low on space (${freePct}% free). This may cause slowdowns, failed updates, and app crashes. Immediate cleanup is recommended.`;
+  return `Your ${getDeviceName()} is critically low on space (${freePct}% free). This may cause slowdowns, failed updates, and app crashes. Immediate cleanup is recommended.`;
 }
 
 function generateExplanation(result: ScanResult): string {
@@ -86,7 +93,7 @@ function generateExplanation(result: ScanResult): string {
   const cleanable = formatBytes(result.safe_recovery_bytes);
   const total = formatBytes(result.used_bytes);
 
-  return `Your Mac is using ${total} of storage. The largest contributor is ${CATEGORY_NAMES[top1?.name] || top1?.name} (${formatBytes(top1?.size_bytes || 0)}), followed by ${CATEGORY_NAMES[top2?.name] || top2?.name} (${formatBytes(top2?.size_bytes || 0)}). The good news is that ${cleanable} appears immediately recoverable without affecting your work. Most remaining storage belongs to active software and personal files that should be reviewed rather than removed. If this were my computer, I'd start by cleaning the developer caches — they rebuild automatically and free the most space with zero risk.`;
+  return `Your ${getDeviceName()} is using ${total} of storage. The largest contributor is ${CATEGORY_NAMES[top1?.name] || top1?.name} (${formatBytes(top1?.size_bytes || 0)}), followed by ${CATEGORY_NAMES[top2?.name] || top2?.name} (${formatBytes(top2?.size_bytes || 0)}). The good news is that ${cleanable} appears immediately recoverable without affecting your work. Most remaining storage belongs to active software and personal files that should be reviewed rather than removed. If this were my computer, I'd start by cleaning the developer caches — they rebuild automatically and free the most space with zero risk.`;
 }
 
 export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: DashboardProps) {
@@ -185,7 +192,7 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
       {/* Personalized Greeting */}
       <div className="greeting-section">
         <h2 className="greeting-text">
-          {getGreeting()}, your Mac is {result.health_grade === "A" || result.health_grade === "A+" ? "healthy" : result.health_grade === "B" ? "in good shape" : "needs attention"}.
+          {getGreeting()}, your ${getDeviceName()} is {result.health_grade === "A" || result.health_grade === "A+" ? "healthy" : result.health_grade === "B" ? "in good shape" : "needs attention"}.
         </h2>
         <p className="greeting-summary">
           {quickCleanItems.length > 0
@@ -314,7 +321,7 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
       {/* Storage Timeline */}
       {forecast && (forecast.daily_growth_bytes !== 0 || forecast.total_cleaned_bytes > 0) && (
         <div className="timeline-card">
-          <h3 className="timeline-title">📈 Your Mac Over Time</h3>
+          <h3 className="timeline-title">📈 Your ${getDeviceName()} Over Time</h3>
           <div className="timeline-stats">
             {forecast.daily_growth_bytes > 0 && (
               <span className="timeline-stat timeline-growing">↑ Growing {formatBytes(Math.abs(forecast.weekly_growth_bytes))}/week</span>
