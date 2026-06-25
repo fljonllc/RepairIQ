@@ -171,7 +171,13 @@ export function Dashboard({ result, onShowWhy, onMoveToVault, onQuickClean }: Da
               <div key={item.path} className="opportunity-row">
                 <span className="opportunity-number">{index + 1}.</span>
                 <div className="opportunity-details">
-                  <span className="opportunity-name">{item.name}</span>
+                  <span className="opportunity-name">
+                    {item.subcategory && item.subcategory !== item.name
+                      ? `${item.name} (${item.subcategory})`
+                      : item.owner && item.owner !== "You" && item.owner !== "You (Downloads)"
+                      ? `${item.name} — ${item.owner}`
+                      : item.name}
+                  </span>
                   <div className="opportunity-meta">
                     <span className="opportunity-recover">
                       Recover: {formatBytes(item.size_bytes)}

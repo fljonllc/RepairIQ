@@ -225,7 +225,7 @@ fn walk_directory_once(path: &Path) -> DirScanResult {
     let has_git = path.join(".git").exists();
 
     for entry in WalkDir::new(path)
-        .max_depth(50)
+        .max_depth(20)
         .into_iter()
         .filter_map(|e| e.ok())
     {
@@ -380,28 +380,22 @@ fn get_scan_targets(home: &Path) -> Vec<(&'static str, &'static str, PathBuf)> {
     #[cfg(target_os = "macos")]
     {
         vec![
-            // System Data
+            // System Data (top-level Library dirs — fast, no overlap)
             ("System Data", "Caches", home.join("Library/Caches")),
             ("System Data", "Application Support", home.join("Library/Application Support")),
             ("System Data", "Logs", home.join("Library/Logs")),
             ("System Data", "Saved State", home.join("Library/Saved Application State")),
-            ("System Data", "Group Containers", home.join("Library/Group Containers")),
-            ("System Data", "Containers", home.join("Library/Containers")),
-            ("System Data", "Homebrew Cache", home.join("Library/Caches/Homebrew")),
-            // Developer
+            // Developer (specific known-large dirs — not deep tree walks)
             ("Developer", "Xcode DerivedData", home.join("Library/Developer/Xcode/DerivedData")),
             ("Developer", "Xcode Archives", home.join("Library/Developer/Xcode/Archives")),
             ("Developer", "CoreSimulator", home.join("Library/Developer/CoreSimulator")),
             ("Developer", "iOS DeviceSupport", home.join("Library/Developer/Xcode/iOS DeviceSupport")),
-            ("Developer", "watchOS DeviceSupport", home.join("Library/Developer/Xcode/watchOS DeviceSupport")),
             ("Developer", "Android SDK", home.join("Library/Android")),
             ("Developer", "Gradle Cache", home.join(".gradle")),
             ("Developer", "Cargo Registry", home.join(".cargo/registry")),
             ("Developer", "npm Cache", home.join(".npm")),
-            ("Developer", "Cocoapods Cache", home.join("Library/Caches/CocoaPods")),
-            // Docker
+            // Docker (specific container only — not all containers)
             ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
-            ("Docker", "Docker Config", home.join(".docker")),
             // Virtual Machines
             ("Virtual Machines", "UTM VMs", home.join("Library/Containers/com.utmapp.UTM/Data/Documents")),
             // Mail
