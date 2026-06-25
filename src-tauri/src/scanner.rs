@@ -380,23 +380,44 @@ fn get_scan_targets(home: &Path) -> Vec<(&'static str, &'static str, PathBuf)> {
     #[cfg(target_os = "macos")]
     {
         vec![
+            // System Data
             ("System Data", "Caches", home.join("Library/Caches")),
             ("System Data", "Application Support", home.join("Library/Application Support")),
             ("System Data", "Logs", home.join("Library/Logs")),
             ("System Data", "Saved State", home.join("Library/Saved Application State")),
+            ("System Data", "Group Containers", home.join("Library/Group Containers")),
+            ("System Data", "Containers", home.join("Library/Containers")),
+            ("System Data", "Homebrew Cache", home.join("Library/Caches/Homebrew")),
+            // Developer
             ("Developer", "Xcode DerivedData", home.join("Library/Developer/Xcode/DerivedData")),
             ("Developer", "Xcode Archives", home.join("Library/Developer/Xcode/Archives")),
             ("Developer", "CoreSimulator", home.join("Library/Developer/CoreSimulator")),
+            ("Developer", "iOS DeviceSupport", home.join("Library/Developer/Xcode/iOS DeviceSupport")),
+            ("Developer", "watchOS DeviceSupport", home.join("Library/Developer/Xcode/watchOS DeviceSupport")),
+            ("Developer", "Android SDK", home.join("Library/Android")),
+            ("Developer", "Gradle Cache", home.join(".gradle")),
             ("Developer", "Cargo Registry", home.join(".cargo/registry")),
             ("Developer", "npm Cache", home.join(".npm")),
+            ("Developer", "Cocoapods Cache", home.join("Library/Caches/CocoaPods")),
+            // Docker
             ("Docker", "Docker Data", home.join("Library/Containers/com.docker.docker")),
-            ("Downloads", "Downloads", home.join("Downloads")),
+            ("Docker", "Docker Config", home.join(".docker")),
+            // Virtual Machines
             ("Virtual Machines", "UTM VMs", home.join("Library/Containers/com.utmapp.UTM/Data/Documents")),
+            // Mail
+            ("Mail", "Mail Data", home.join("Library/Mail")),
+            // Messages
             ("Messages", "Messages Data", home.join("Library/Messages")),
+            // Music & Movies
             ("Music", "Music Library", home.join("Music")),
+            ("Movies", "Movies", home.join("Movies")),
+            // User folders
+            ("Downloads", "Downloads", home.join("Downloads")),
             ("Documents", "Documents", home.join("Documents")),
             ("Desktop", "Desktop", home.join("Desktop")),
+            // Applications
             ("Applications", "Applications", PathBuf::from("/Applications")),
+            // Trash
             ("Trash", "Trash", home.join(".Trash")),
         ]
     }
@@ -405,17 +426,29 @@ fn get_scan_targets(home: &Path) -> Vec<(&'static str, &'static str, PathBuf)> {
     {
         let appdata = home.join("AppData");
         vec![
+            // System
             ("System Data", "Temp Files", PathBuf::from("C:\\Windows\\Temp")),
             ("System Data", "Local Cache", appdata.join("Local\\Temp")),
             ("System Data", "App Cache", appdata.join("Local\\Microsoft")),
+            ("System Data", "Windows Update Cache", PathBuf::from("C:\\Windows\\SoftwareDistribution\\Download")),
+            // Developer
             ("Developer", "Cargo Registry", home.join(".cargo\\registry")),
             ("Developer", "npm Cache", appdata.join("Local\\npm-cache")),
             ("Developer", "nuget Cache", appdata.join("Local\\NuGet")),
+            ("Developer", "Gradle Cache", home.join(".gradle")),
+            ("Developer", "Android SDK", appdata.join("Local\\Android")),
+            // Docker
             ("Docker", "Docker Data", appdata.join("Local\\Docker")),
+            // User folders
             ("Downloads", "Downloads", home.join("Downloads")),
             ("Documents", "Documents", home.join("Documents")),
             ("Desktop", "Desktop", home.join("Desktop")),
+            ("Videos", "Videos", home.join("Videos")),
+            ("Music", "Music", home.join("Music")),
+            // Applications
             ("Applications", "Programs", PathBuf::from("C:\\Program Files")),
+            ("Applications", "Programs x86", PathBuf::from("C:\\Program Files (x86)")),
+            // Trash
             ("Trash", "Recycle Bin", PathBuf::from("C:\\$Recycle.Bin")),
         ]
     }
